@@ -1,0 +1,2 @@
+# Private files: never served directly. Downloads go through FileController after an authorisation check.
+Require all denied

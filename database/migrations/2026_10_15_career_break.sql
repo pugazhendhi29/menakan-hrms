@@ -1,0 +1,2 @@
+-- Employee status: add "Career Break" (a current employee who is away for an extended, agreed period).
+ALTER TABLE employees MODIFY status ENUM('active','probation','on_leave','career_break','suspended','left') NOT NULL DEFAULT 'active';

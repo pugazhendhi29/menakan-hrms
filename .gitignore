@@ -1,0 +1,28 @@
+/vendor/
+/.env
+/storage/documents/*
+/storage/payslips/*
+/storage/imports/*
+/storage/exports/*
+/storage/tmp/*
+/storage/sessions/*
+/storage/logs/*
+!/storage/**/.gitkeep
+/dist/
+.phpunit.result.cache
+
+# Private uploads and generated files (never commit employee data)
+/storage/photos/*
+/storage/p60/*
+!/storage/**/.gitkeep
+
+# Archives and backups (may contain .env or employee files)
+*.zip
+*.rar
+*.7z
+*.sql.gz
+/app.zip
+
+# Local tooling
+/.vscode/
+/.idea/

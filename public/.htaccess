@@ -1,0 +1,14 @@
+# Front controller: every request that is not a real file goes to index.php.
+# RewriteBase must match APP_BASE_PATH in .env (use "/" when served from the domain root).
+Options -Indexes
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /menakan-hrms/
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
+
+<FilesMatch "\.(env|ini|log|sql|md|json|lock)$">
+    Require all denied
+</FilesMatch>
