@@ -12,6 +12,7 @@ use App\Core\Response;
 use App\Core\ValidationException;
 use App\Services\Mailer;
 use App\Services\NewsService;
+use App\Services\NewsThreadService;
 
 /** News: admins write, schedule and send announcements (/news); employees read the ones sent to them (/my/news). */
 final class NewsController extends Controller
@@ -162,7 +163,7 @@ final class NewsController extends Controller
     {
         $rows = DB::all("SELECT n.id, n.title, n.sent_at, d.sent_at AS received_at FROM news_deliveries d JOIN news_posts n ON n.id = d.news_id
                           WHERE d.employee_id = ? AND d.status IN ('sent','logged') ORDER BY d.sent_at DESC", [(int) Auth::employeeId()]);
-        return view('my/news', ['title' => 'News', 'rows' => $rows]);
+        return view('my/news', ['title' => 'News', 'rows' => $rows, 'threads' => NewsThreadService::forEmployee((int) Auth::employeeId())]);
     }
 
     /** One announcement, only if it was delivered to this employee. Shown personalised, as in their email. */

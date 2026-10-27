@@ -15,7 +15,7 @@
     </select></div>
   <div><label class="form-label" for="source">Source</label>
     <select class="form-select form-select-sm" id="source" name="source"><option value="">All</option>
-      <?php foreach (['web' => 'Web check-in', 'import' => 'Import', 'manual' => 'Manual'] as $k => $v): ?><option value="<?= $k ?>"<?= selected($k, $request->str('source')) ?>><?= $v ?></option><?php endforeach; ?>
+      <?php foreach (['web' => 'Web check-in', 'import' => 'Import', 'manual' => 'Manual', 'rota' => 'From rota'] as $k => $v): ?><option value="<?= $k ?>"<?= selected($k, $request->str('source')) ?>><?= $v ?></option><?php endforeach; ?>
     </select></div>
   <div><label class="form-label" for="approved">Approved</label>
     <select class="form-select form-select-sm" id="approved" name="approved"><option value="">Any</option><option value="0"<?= selected('0', $request->str('approved')) ?>>Not approved</option><option value="1"<?= selected('1', $request->str('approved')) ?>>Approved</option></select></div>
@@ -47,8 +47,8 @@
         <td><?= e(uk_time($a['check_out_at'])) ?><?= $a['check_out_at'] && from_utc($a['check_out_at'])->format('Y-m-d') !== $a['work_date'] ? ' <small>(+1)</small>' : '' ?></td>
         <td class="num"><?= e($a['break_minutes']) ?></td><td class="num"><?= e(hours($a['net_minutes'] === null ? null : (int) $a['net_minutes'])) ?></td>
         <td><?= status_badge($a['status']) ?><?= $a['is_approved'] ? ' <i class="bi bi-check-circle text-success" title="Approved"></i>' : '' ?></td>
-        <td><?= e(ucfirst($a['source'])) ?></td>
-        <td class="text-end text-nowrap"><a class="btn btn-sm btn-outline-secondary" href="<?= e(url('/attendance/' . $a['id'])) ?>">View</a> <a class="btn btn-sm btn-outline-secondary" href="<?= e(url('/attendance/' . $a['id'] . '/edit')) ?>">Edit</a></td>
+        <td><?= $a['source'] === 'rota' ? '<span class="badge text-bg-info">From rota</span>' : e(ucfirst($a['source'])) ?></td>
+        <td class="text-end text-nowrap"><a class="btn btn-sm btn-outline-secondary" href="<?= e(url('/attendance/' . $a['id'])) ?>">View</a> <?php if ($a['locked']): ?><span class="btn btn-sm btn-outline-secondary disabled" title="From the rota: can only be changed on a leave day"><i class="bi bi-lock"></i></span><?php else: ?><a class="btn btn-sm btn-outline-secondary" href="<?= e(url('/attendance/' . $a['id'] . '/edit')) ?>">Edit</a><?php endif; ?></td>
       </tr>
     <?php endforeach; ?>
     <?php if (!$rows): ?><tr><td colspan="11" class="empty">No attendance in this period.</td></tr><?php endif; ?>

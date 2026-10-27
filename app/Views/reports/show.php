@@ -19,7 +19,7 @@
   <?php if ($has('status')): ?>
     <div><label class="form-label" for="status">Status</label><select class="form-select form-select-sm" id="status" name="status">
       <option value="current"<?= selected('current', $f['status']) ?>>Current</option><option value="all"<?= selected('all', $f['status']) ?>>All incl. leavers</option>
-      <?php foreach (App\Services\EmployeeService::STATUSES as $k => $v): ?><option value="<?= e($k) ?>"<?= selected($k, $f['status']) ?>><?= e($v) ?></option><?php endforeach; ?></select></div>
+      <?php foreach (App\Services\EmployeeService::statuses(true) as $k => $v): ?><option value="<?= e($k) ?>"<?= selected($k, $f['status']) ?>><?= e($v) ?></option><?php endforeach; ?></select></div>
   <?php endif; ?>
   <?php if ($has('pay')): ?><div class="form-check align-self-center mt-3"><input class="form-check-input" type="checkbox" id="pay" name="pay" value="1"<?= checked($f['pay']) ?>><label class="form-check-label" for="pay">Include pay data <span class="badge text-bg-danger">logged</span></label></div><?php endif; ?>
   <button class="btn btn-sm btn-primary">Run report</button>

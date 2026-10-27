@@ -7,7 +7,7 @@ use App\Services\Notifier;
 $user = Auth::user();
 $path = $GLOBALS['__request_path'] ?? '/';
 $isAdmin = Auth::isAdmin();
-$unread = $user ? Notifier::unreadCount((int) $user['id']) : 0;
+$unread = $user && $isAdmin ? Notifier::unreadCount((int) $user['id']) : 0;
 $flashes = Session::takeFlashes();
 $nav = function (string $href, string $label, string $icon, bool $exact = false) use ($path): string {
     $on = $exact ? $path === $href : ($path === $href || str_starts_with($path, rtrim($href, '/') . '/'));
@@ -20,8 +20,8 @@ $ukNow = uk_now();
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?= e(($title ?? 'HR Portal') . ' · Menakan Transport') ?></title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Semi+Condensed:wght@600;700&display=swap">
+<link rel="preload" href="<?= e(asset('fonts/inter-latin-6ab57b19.woff2')) ?>" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="<?= e(asset('css/fonts.css')) ?>">
 <link rel="stylesheet" href="<?= e(asset('vendor/bootstrap/bootstrap.min.css')) ?>">
 <link rel="stylesheet" href="<?= e(asset('vendor/bootstrap-icons/bootstrap-icons.min.css')) ?>">
 <link rel="stylesheet" href="<?= e(asset('css/app.css')) ?>">
@@ -81,6 +81,7 @@ $ukNow = uk_now();
     <?php endif; ?>
     </nav>
   </aside>
+  <div class="side-backdrop" data-toggle-sidebar aria-hidden="true"></div>
   <div class="main">
     <header class="top">
       <button class="btn btn-sm btn-outline-secondary d-lg-none" type="button" data-toggle-sidebar aria-controls="sidebar" aria-label="Menu"><i class="bi bi-list"></i></button>
@@ -90,9 +91,11 @@ $ukNow = uk_now();
       </div>
       <div class="sp"></div>
       <?php if (!empty($actions)) echo $actions; ?>
+      <?php if ($isAdmin): /* notifications are for admins only */ ?>
       <a class="bell" href="<?= e(url('/notifications')) ?>" aria-label="Notifications<?= $unread ? " ($unread unread)" : '' ?>">
         <i class="bi bi-bell"></i><?php if ($unread): ?><em><?= $unread > 99 ? '99+' : $unread ?></em><?php endif; ?>
       </a>
+      <?php endif; ?>
       <div class="dropdown">
         <button class="who btn btn-link text-decoration-none dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
           <?= employee_avatar(['id' => $user['employee_id'], 'photo_key' => $user['photo_key'] ?? null, 'first_name' => $user['first_name'] ?? $user['username'], 'last_name' => $user['last_name'] ?? ''], 32) ?>
@@ -117,8 +120,8 @@ $ukNow = uk_now();
     </main>
   </div>
 </div>
-<script src="<?= e(asset('vendor/bootstrap/bootstrap.bundle.min.js')) ?>"></script>
-<?php if (!empty($charts)): ?><script src="<?= e(asset('vendor/chartjs/chart.umd.min.js')) ?>"></script><?php endif; ?>
-<script src="<?= e(asset('js/app.js')) ?>"></script>
+<script src="<?= e(asset('vendor/bootstrap/bootstrap.bundle.min.js')) ?>" defer></script>
+<?php if (!empty($charts)): ?><script src="<?= e(asset('vendor/chartjs/chart.umd.min.js')) ?>" defer></script><?php endif; ?>
+<script src="<?= e(asset('js/app.js')) ?>" defer></script>
 </body>
 </html>

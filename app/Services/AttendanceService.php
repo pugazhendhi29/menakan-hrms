@@ -9,6 +9,116 @@ use App\Core\ValidationException;
 
 final class AttendanceService
 {
+    /** Attendance is recorded from the rota for shifts up to and including this UK date. */
+    public const ROTA_UNTIL = '2026-10-31';
+
+    /**
+     * Records attendance from the rota: every published shift that has ended, from the employee's start date to
+     * ROTA_UNTIL, gets an attendance record with the shift's times (source "rota"). Days with approved leave, and
+     * shifts the employee already has real attendance for (web check-in, import, manual), are left alone. A rota
+     * record follows its shift when the shift changes, and is removed when the shift is cancelled or unpublished.
+     * Approved records are never touched. Safe to run any number of times.
+     * @return array{created:int, updated:int, removed:int}
+     */
+    public static function fillFromRota(?int $employeeId = null, ?int $userId = null): array
+    {
+        $cutoff = min(now_utc(), to_utc((new \DateTimeImmutable(self::ROTA_UNTIL))->modify('+1 day')->format('Y-m-d') . ' 00:00'));
+        $emp = $employeeId ? ' AND s.employee_id = ' . (int) $employeeId : '';
+        $empA = $employeeId ? ' AND employee_id = ' . (int) $employeeId : '';
+        $shifts = DB::all("SELECT s.*, e.start_date AS emp_start, e.end_date AS emp_end FROM shifts s JOIN employees e ON e.id = s.employee_id
+                            WHERE s.status = 'published' AND s.end_at <= ? AND e.deleted_at IS NULL $emp ORDER BY s.start_at", [$cutoff]);
+        $rota = [];
+        foreach (DB::all("SELECT * FROM attendance_records WHERE source = 'rota' $empA") as $a) {
+            $rota[(int) $a['shift_id']] = $a;
+        }
+        $real = [];
+        foreach (DB::all("SELECT employee_id, check_in_at, COALESCE(check_out_at, DATE_ADD(check_in_at, INTERVAL 16 HOUR)) AS out_at FROM attendance_records WHERE source <> 'rota' $empA") as $a) {
+            $real[(int) $a['employee_id']][] = $a;
+        }
+        $leave = [];
+        foreach (DB::all("SELECT employee_id, start_date, end_date FROM leave_requests WHERE status = 'approved' $empA") as $l) {
+            $leave[(int) $l['employee_id']][] = $l;
+        }
+        $created = $updated = $removed = 0;
+        $kept = [];
+        DB::transaction(function () use ($shifts, $rota, $real, $leave, $userId, &$created, &$updated, &$removed, &$kept) {
+            foreach ($shifts as $s) {
+                $eid = (int) $s['employee_id'];
+                $date = WeekBoundary::ukDateOfUtc($s['start_at']);
+                if ($date < $s['emp_start'] || ($s['emp_end'] && $date > $s['emp_end'])) {
+                    continue;
+                }
+                $existing = $rota[(int) $s['id']] ?? null;
+                $overlapsReal = (bool) array_filter($real[$eid] ?? [], fn ($a) => $a['check_in_at'] < $s['end_at'] && $a['out_at'] > $s['start_at']);
+                if ($existing && $overlapsReal && !$existing['is_approved']) {
+                    DB::query('DELETE FROM attendance_records WHERE id = ?', [(int) $existing['id']]);   // real attendance wins
+                    $removed++;
+                    continue;
+                }
+                if ($existing) {
+                    $kept[(int) $existing['id']] = true;
+                    $data = ['work_date' => $date, 'check_in_at' => $s['start_at'], 'check_out_at' => $s['end_at'], 'break_minutes' => (int) $s['break_minutes'], 'net_minutes' => (int) $s['net_minutes']];
+                    if (!$existing['is_approved'] && array_diff_assoc(array_map('strval', $data), array_map('strval', array_intersect_key($existing, $data)))) {
+                        DB::update('attendance_records', $data, 'id = ?', [(int) $existing['id']]);
+                        $updated++;
+                    }
+                    continue;
+                }
+                $onLeave = (bool) array_filter($leave[$eid] ?? [], fn ($l) => $l['start_date'] <= $date && $l['end_date'] >= $date);
+                if ($onLeave || $overlapsReal) {
+                    continue;
+                }
+                $id = DB::insert('attendance_records', ['employee_id' => $eid, 'work_date' => $date, 'check_in_at' => $s['start_at'], 'check_out_at' => $s['end_at'],
+                    'break_minutes' => (int) $s['break_minutes'], 'net_minutes' => (int) $s['net_minutes'], 'status' => 'present', 'source' => 'rota',
+                    'shift_id' => (int) $s['id'], 'notes' => 'Recorded from the rota', 'created_by' => $userId]);
+                $kept[$id] = true;
+                $created++;
+            }
+            // Rota records whose shift was cancelled, unpublished or removed go too.
+            foreach ($rota as $a) {
+                if (!isset($kept[(int) $a['id']]) && !$a['is_approved']
+                    && !DB::value("SELECT id FROM shifts WHERE id = ? AND status = 'published'", [(int) $a['shift_id']])) {
+                    DB::query('DELETE FROM attendance_records WHERE id = ?', [(int) $a['id']]);
+                    $removed++;
+                }
+            }
+        });
+        if ($created || $updated || $removed) {
+            AuditLogger::log('attendance.rota_filled', 'attendance', null, sprintf('Attendance from the rota: %d recorded, %d updated, %d removed', $created, $updated, $removed),
+                ['employee_id' => $employeeId, 'until' => self::ROTA_UNTIL], $userId);
+        }
+        return ['created' => $created, 'updated' => $updated, 'removed' => $removed];
+    }
+
+    /** True when the employee has approved leave on the record's work date. */
+    public static function onLeave(array $record): bool
+    {
+        return (bool) DB::value("SELECT id FROM leave_requests WHERE employee_id = ? AND status = 'approved' AND start_date <= ? AND end_date >= ? LIMIT 1",
+            [(int) $record['employee_id'], $record['work_date'], $record['work_date']]);
+    }
+
+    /** Rota attendance can only be changed on a day the employee is on approved leave. */
+    public static function isLocked(array $record): bool
+    {
+        return ($record['source'] ?? '') === 'rota' && !self::onLeave($record);
+    }
+
+    public const LOCKED_MESSAGE = 'This attendance was recorded from the rota. It can only be changed on a day the employee is on approved leave.';
+
+    /** Removes a rota record on a leave day (the employee did not work the shift). */
+    public static function removeRotaRecord(int $id, string $reason, int $userId): void
+    {
+        $a = DB::one('SELECT * FROM attendance_records WHERE id = ?', [$id]) ?? throw new ValidationException('Attendance record not found.');
+        if ($a['source'] !== 'rota' || !self::onLeave($a)) {
+            throw new ValidationException('Only attendance recorded from the rota, on a day the employee is on approved leave, can be removed.');
+        }
+        if (trim($reason) === '') {
+            throw new ValidationException('Give a reason.', ['reason' => 'Enter a reason.']);
+        }
+        DB::query('DELETE FROM attendance_records WHERE id = ?', [$id]);
+        AuditLogger::log('attendance.removed', 'attendance', $id, sprintf('Removed rota attendance for employee #%d on %s (on leave): %s', (int) $a['employee_id'], uk_date($a['work_date']), trim($reason)),
+            ['check_in_at' => $a['check_in_at'], 'check_out_at' => $a['check_out_at']], $userId);
+    }
     /** Marks open sessions older than the configured limit as Incomplete. */
     public static function flagIncomplete(?int $employeeId = null): int
     {
@@ -116,6 +226,9 @@ final class AttendanceService
         if (!preg_match('/^\d{1,3}$/', $break === '' ? '0' : $break)) {
             $errors['break_minutes'] = 'Break must be whole minutes.';
         }
+        if ($id && ($current = DB::one('SELECT * FROM attendance_records WHERE id = ?', [$id])) && self::isLocked($current)) {
+            throw new ValidationException(self::LOCKED_MESSAGE);
+        }
         $employeeId = $id ? (int) DB::value('SELECT employee_id FROM attendance_records WHERE id = ?', [$id]) : (int) ($input['employee_id'] ?? 0);
         if (!$employeeId || !DB::value('SELECT id FROM employees WHERE id = ? AND deleted_at IS NULL', [$employeeId])) {
             $errors['employee_id'] = 'Choose an employee.';
@@ -167,6 +280,9 @@ final class AttendanceService
                 }
                 if (!$changes) {
                     throw new ValidationException('Nothing was changed.');
+                }
+                if ($before['source'] === 'rota') {
+                    $data['source'] = 'manual';   // corrected by an admin: no longer follows the shift
                 }
                 DB::update('attendance_records', $data, 'id = ?', [$id]);
                 AuditLogger::log('attendance.corrected', 'attendance', $id, 'Corrected attendance record', $changes + ['reason' => $reason]);

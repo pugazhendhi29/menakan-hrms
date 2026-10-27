@@ -63,7 +63,7 @@ final class ShiftImportController extends Controller
     {
         return $this->attempt($request, '/shift-import/' . $id, function () use ($request, $id) {
             $r = ShiftImportService::confirm($id, $request->bool('approve_over_limit'), $request->str('reason'), $this->userId());
-            flash('success', sprintf('Import complete: %d shifts added, %d skipped.', $r['imported'], $r['skipped']));
+            flash('success', sprintf('Import complete: %d shifts added, %d updated, %d skipped.', $r['imported'], $r['updated'], $r['skipped']));
             return redirect('/shift-import/' . $id);
         });
     }

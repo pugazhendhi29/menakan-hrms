@@ -11,6 +11,7 @@ use App\Core\Response;
 use App\Core\ValidationException;
 use App\Core\Validator;
 use App\Services\AuditLogger;
+use App\Services\EmployeeService;
 use App\Services\Settings;
 
 /**
@@ -21,6 +22,8 @@ final class SettingController extends Controller
 {
     private const LOOKUPS = [
         'departments' => ['Departments', ['name' => ['Name', 'text', true], 'code' => ['Code', 'text', true]], 'is_active', 'name'],
+        'employee_statuses' => ['Employee statuses', ['name' => ['Name', 'text', true], 'code' => ['Code', 'text', false], 'colour' => ['Colour', 'colour', false],
+            'counts_as_working' => ['Counts as working', 'bool', false], 'sort_order' => ['Order', 'int', true]], 'is_active', 'sort_order'],
         'job_titles' => ['Job titles', ['title' => ['Title', 'text', true], 'department_id' => ['Department', 'ref:departments:name', false], 'is_driver' => ['Driving role', 'bool', false]], 'is_active', 'title'],
         'locations' => ['Locations', ['name' => ['Name', 'text', true], 'address' => ['Address', 'text', false]], 'is_active', 'name'],
         'shift_types' => ['Shift types', ['name' => ['Name', 'text', true], 'code' => ['Code', 'text', true], 'default_start' => ['Start', 'time', true],
@@ -65,9 +68,6 @@ final class SettingController extends Controller
             };
             if (str_ends_with($s['key'], '_date') && $ok) {
                 $ok = Validator::isDate($value);
-            }
-            if ($s['key'] === 'leave_year_start_month' && $ok) {
-                $ok = (int) $value >= 1 && (int) $value <= 12;
             }
             if (!$ok) {
                 $errors[$s['key']] = $s['label'] . ' has an invalid value.';
@@ -143,10 +143,18 @@ final class SettingController extends Controller
                 }
                 $data[$col] = $v;
             }
+            if ($table === 'employee_statuses') {
+                $old = $id ? DB::one('SELECT * FROM employee_statuses WHERE id = ?', [$id]) : null;
+                $data = $this->employeeStatus($data, $old, $errors);
+            }
             if ($errors) {
                 throw new ValidationException('Please correct the highlighted fields.', $errors);
             }
             try {
+                if ($table === 'employee_statuses' && isset($old) && $old && $old['code'] !== $data['code']) {
+                    // A renamed code moves the employees who have it.
+                    DB::query('UPDATE employees SET status = ? WHERE status = ?', [$data['code'], $old['code']]);
+                }
                 if ($id) {
                     DB::update($table, $data, 'id = ?', [$id]);
                 } else {
@@ -159,6 +167,7 @@ final class SettingController extends Controller
                 throw $e;
             }
             AuditLogger::log('settings.lookup_saved', $table, $id, "Saved $label entry #$id", $data);
+            EmployeeService::forgetStatuses();
             flash('success', 'Saved.');
             return redirect("/settings/$table");
         });
@@ -168,6 +177,10 @@ final class SettingController extends Controller
     {
         [$label, , $toggle] = $this->def($table);
         $this->findOr404("SELECT id FROM `$table` WHERE id = ?", [$id]);
+        if ($table === 'employee_statuses' && DB::value('SELECT is_system FROM employee_statuses WHERE id = ?', [$id])) {
+            flash('warning', 'Active, Probation and Left are built in and cannot be switched off.');
+            return redirect("/settings/$table");
+        }
         if ($toggle === null) {
             DB::query("DELETE FROM `$table` WHERE id = ?", [$id]);
             AuditLogger::log('settings.lookup_deleted', $table, $id, "Deleted $label entry #$id");
@@ -178,5 +191,27 @@ final class SettingController extends Controller
             flash('success', 'Updated.');
         }
         return redirect("/settings/$table");
+    }
+    /**
+     * Employee status rules: the code is lowercase letters, numbers and underscores (made from the name when left
+     * blank); built-in statuses (Active, Probation, Left) keep their code.
+     */
+    private function employeeStatus(array $data, ?array $old, array &$errors): array
+    {
+        if ($old && $old['is_system']) {
+            $data['code'] = $old['code'];
+            $data['counts_as_working'] = (int) $old['counts_as_working'];   // Left never counts, Active and Probation always do
+        } else {
+            $code = strtolower(trim((string) ($data['code'] ?? '')));
+            if ($code === '') {
+                $code = trim((string) preg_replace('/[^a-z0-9]+/', '_', strtolower((string) $data['name'])), '_');
+            }
+            if (!preg_match('/^[a-z][a-z0-9_]{1,29}$/', $code)) {
+                $errors['code'] = 'Code: 2-30 lowercase letters, numbers or underscores, starting with a letter.';
+            }
+            $data['code'] = $code;
+        }
+        $data['colour'] = $data['colour'] ?: '#64748b';
+        return $data;
     }
 }

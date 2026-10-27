@@ -13,28 +13,27 @@ use DateTimeImmutable;
 /**
  * Leave requests, approvals and ledger-based balances.
  * Balance = SUM(leave_ledger.days) for the employee, type and leave year.
+ *
+ * Leave rules: the leave year runs 1 January to 31 December. Annual leave is 28 days a year for someone who
+ * works 5 or more days a week, pro rata for fewer days (28 x days a week / 5), and pro rata for anyone who joins
+ * or leaves during the year. The whole year's entitlement is available from the start of the year (or the start
+ * date). Bank holidays are given on top: they are never taken from the 28 days.
  */
 final class LeaveService
 {
     public const ANNUAL_CODE = 'AL';
+    /** Annual leave days a year for a full-time (5-day) worker. */
+    public const ANNUAL_DAYS = 28.0;
 
-    /** @return array{0:string,1:string,2:int} [start, end, label year] of the leave year containing $date */
+    /** @return array{0:string,1:string,2:int} [start, end, year] of the leave year (1 January to 31 December) containing $date */
     public static function yearBounds(string $date): array
     {
-        $startMonth = (int) Settings::get('leave_year_start_month', 1);
-        $d = new DateTimeImmutable($date);
-        $year = (int) $d->format('Y');
-        if ((int) $d->format('n') < $startMonth) {
-            $year--;
-        }
-        $start = new DateTimeImmutable(sprintf('%04d-%02d-01', $year, $startMonth));
-        $end = $start->modify('+1 year')->modify('-1 day');
-        return [$start->format('Y-m-d'), $end->format('Y-m-d'), $year];
+        return self::boundsForYear((int) (new DateTimeImmutable($date))->format('Y'));
     }
 
     public static function boundsForYear(int $year): array
     {
-        return self::yearBounds(sprintf('%04d-%02d-01', $year, (int) Settings::get('leave_year_start_month', 1)));
+        return [sprintf('%04d-01-01', $year), sprintf('%04d-12-31', $year), $year];
     }
 
     public static function pattern(array $employee): array
@@ -72,9 +71,8 @@ final class LeaveService
     }
 
     /**
-     * Creates the annual leave entitlement for a leave year if it does not exist yet:
-     * an accrual entry, plus one deduction per bank holiday on a working day when the
-     * entitlement includes bank holidays. Idempotent.
+     * Creates the annual leave entitlement for a leave year if it does not exist yet (one accrual entry).
+     * Idempotent.
      */
     public static function ensureEntitlement(int $employeeId, int $year, ?int $userId = null): void
     {
@@ -89,7 +87,7 @@ final class LeaveService
         }
         DB::transaction(function () use ($e, $employeeId, $typeId, $year, $ys, $ye, $userId) {
             $pattern = self::pattern($e);
-            $days = LeaveDayCounter::entitlement((float) Settings::get('annual_leave_weeks', 5.6), LeaveDayCounter::workingDaysPerWeek($pattern), $ys, $ye, $e['start_date'], $e['end_date']);
+            $days = LeaveDayCounter::entitlement(self::ANNUAL_DAYS / 5, LeaveDayCounter::workingDaysPerWeek($pattern), $ys, $ye, $e['start_date'], $e['end_date']);
             $proRated = $e['start_date'] > $ys || ($e['end_date'] && $e['end_date'] < $ye);
             DB::insert('leave_entitlements', [
                 'employee_id' => $employeeId, 'leave_type_id' => $typeId, 'leave_year' => $year,
@@ -100,7 +98,7 @@ final class LeaveService
         });
     }
 
-    /** Recalculates accrual and bank holiday entries for a year (request deductions are untouched). */
+    /** Recalculates the year's entitlement from the leave rules (requests and manual adjustments are untouched). */
     public static function recalculate(int $employeeId, int $year, ?int $userId): void
     {
         $typeId = self::annualTypeId();
@@ -117,21 +115,6 @@ final class LeaveService
             'employee_id' => $e['id'], 'leave_type_id' => $typeId, 'leave_year' => $year, 'entry_type' => 'accrual',
             'days' => $days, 'note' => 'Annual entitlement ' . $year, 'created_by' => $userId, 'created_at' => now_utc(),
         ]);
-        if (!Settings::get('leave_includes_bank_holidays', true)) {
-            return;
-        }
-        [$ys, $ye] = self::boundsForYear($year);
-        $from = max($ys, $e['start_date']);
-        $to = $e['end_date'] ? min($ye, $e['end_date']) : $ye;
-        $pattern = self::pattern($e);
-        foreach (DB::all('SELECT holiday_date, name FROM public_holidays WHERE region = ? AND holiday_date BETWEEN ? AND ? ORDER BY holiday_date', [Settings::get('bank_holiday_region', 'england-and-wales'), $from, $to]) as $h) {
-            if (LeaveDayCounter::isWorkingDay(new DateTimeImmutable($h['holiday_date']), $pattern)) {
-                DB::insert('leave_ledger', [
-                    'employee_id' => $e['id'], 'leave_type_id' => $typeId, 'leave_year' => $year, 'entry_type' => 'bank_holiday',
-                    'days' => -1, 'note' => 'Bank holiday: ' . $h['name'] . ' (' . uk_date($h['holiday_date']) . ')', 'created_by' => $userId, 'created_at' => now_utc(),
-                ]);
-            }
-        }
     }
 
     public static function balance(int $employeeId, int $typeId, int $year): float
@@ -157,9 +140,8 @@ final class LeaveService
         $entitlement = (float) DB::value('SELECT entitlement_days FROM leave_entitlements WHERE employee_id = ? AND leave_type_id = ? AND leave_year = ?', [$employeeId, $typeId, $year]);
         $balance = self::balance($employeeId, $typeId, $year);
         $pending = self::pendingDays($employeeId, $typeId, $ys, $ye);
-        $bankHolidays = -(float) DB::value("SELECT COALESCE(SUM(days),0) FROM leave_ledger WHERE employee_id = ? AND leave_type_id = ? AND leave_year = ? AND entry_type = 'bank_holiday'", [$employeeId, $typeId, $year]);
         return ['year' => $year, 'year_start' => $ys, 'year_end' => $ye, 'entitlement' => $entitlement, 'remaining' => $balance,
-            'pending' => $pending, 'available' => $balance - $pending, 'bank_holidays' => $bankHolidays];
+            'pending' => $pending, 'available' => $balance - $pending];
     }
 
     public static function countDays(array $employee, string $start, string $end, bool $startHalf, bool $endHalf): float

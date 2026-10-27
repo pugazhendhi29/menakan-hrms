@@ -1,26 +1,11 @@
 <?php use App\Services\NewsService; ?>
-<div class="card">
-  <div class="card-body d-flex flex-wrap gap-3 align-items-center">
-    <div class="flex-grow-1">
-      <div class="fw-semibold"><i class="bi bi-envelope-at"></i> Sender: <?= e(NewsService::SENDER_NAME) ?> &lt;<?= e(NewsService::SENDER_EMAIL) ?>&gt;</div>
-      <div class="small text-muted-2">Fixed for every News email; it cannot be changed here. Delivery uses the SMTP server set in the server's .env file. Each employee receives their own copy, so recipients never see each other's addresses.</div>
-      <div class="small mt-1">
-        <?php if ($testMode): ?><span class="badge text-bg-warning">Test mode</span> Email is not configured for delivery: messages are written to the mail log only.
-        <?php elseif (!$check): ?><span class="badge text-bg-secondary">Not checked</span> The sender has not been checked yet. It is also checked automatically before every send.
-        <?php elseif ($check['ok']): ?><span class="badge text-bg-success">Sender authorised</span> <?= e($check['message']) ?> <span class="text-muted-2">(checked <?= e(uk_datetime($check['checked_at'])) ?>)</span>
-        <?php else: ?><span class="badge text-bg-danger">Sender check failed</span> <?= e($check['message']) ?> <span class="text-muted-2">(<?= e(uk_datetime($check['checked_at'])) ?>)</span><?php endif; ?>
-      </div>
-    </div>
-    <form method="post" action="<?= e(url('/news/sender-check')) ?>"><?= csrf_field() ?><button class="btn btn-sm btn-outline-secondary"><i class="bi bi-shield-check"></i> Check sender now</button></form>
-  </div>
-</div>
-
 <form class="filters toolbar" method="get" action="<?= e(url('/news')) ?>">
   <div><label class="form-label" for="status">Status</label>
     <select class="form-select form-select-sm" id="status" name="status" data-autosubmit><option value="">All</option>
       <?php foreach (['draft' => 'Draft', 'scheduled' => 'Scheduled', 'sent' => 'Sent', 'partially_sent' => 'Partially sent', 'failed' => 'Failed'] as $k => $v): ?><option value="<?= $k ?>"<?= selected($k, $status) ?>><?= $v ?></option><?php endforeach; ?>
     </select></div>
   <div class="ms-auto d-flex gap-2">
+    <a class="btn btn-sm btn-outline-secondary" href="<?= e(url('/news/threads')) ?>"><i class="bi bi-chat-left-text"></i> Threads</a>
     <a class="btn btn-sm btn-outline-secondary" href="<?= e(url('/news/templates')) ?>"><i class="bi bi-file-earmark-text"></i> Templates</a>
     <a class="btn btn-sm btn-hivis" href="<?= e(url('/news/create')) ?>"><i class="bi bi-plus-lg"></i> New announcement</a>
   </div>

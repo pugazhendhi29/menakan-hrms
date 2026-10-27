@@ -6,10 +6,14 @@ namespace App\Services;
 
 use App\Core\DB;
 
+/** In-app notifications (the bell). Only admins get them: notifications are turned off for employees. */
 final class Notifier
 {
     public static function toUser(int $userId, string $type, string $title, ?string $body = null, ?string $link = null): void
     {
+        if (DB::value('SELECT role FROM users WHERE id = ?', [$userId]) !== 'admin') {
+            return;   // employees do not get notifications
+        }
         DB::insert('notifications', [
             'user_id' => $userId, 'type' => $type, 'title' => mb_substr($title, 0, 150),
             'body' => $body === null ? null : mb_substr($body, 0, 500), 'link' => $link, 'created_at' => now_utc(),

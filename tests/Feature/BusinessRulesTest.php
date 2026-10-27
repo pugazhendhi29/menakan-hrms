@@ -73,26 +73,35 @@ final class BusinessRulesTest extends FeatureTestCase
         $this->assertSame(2, (int) DB::value('SELECT COUNT(*) FROM attendance_records WHERE employee_id = ?', [self::$f['empB']]));
     }
 
-    public function testAnnualEntitlementIncludesBankHolidays(): void
+    public function testAnnualEntitlementIs28DaysAYearPlusBankHolidays(): void
     {
         $s = LeaveService::annualSummary(self::$f['empA'], '2026-06-01');
+        $this->assertSame(['2026-01-01', '2026-12-31', 2026], [$s['year_start'], $s['year_end'], $s['year']]);   // the leave year is the calendar year
         $this->assertSame(28.0, $s['entitlement']);
-        $this->assertSame(8.0, $s['bank_holidays']);
-        $this->assertSame(20.0, $s['remaining']);
+        $this->assertSame(28.0, $s['remaining']);   // bank holidays are on top: nothing is taken off the 28 days
+        $this->assertSame(['2027-01-01', '2027-12-31', 2027], LeaveService::yearBounds('2027-01-01'));
+        $this->assertSame(['2026-01-01', '2026-12-31', 2026], LeaveService::yearBounds('2026-12-31'));
+
+        // Pro rata: a 3-day-a-week worker gets 28 x 3 / 5 = 16.8, rounded up to 17; a mid-year joiner a share of the year.
+        $part = DB::insert('work_patterns', ['name' => 'Mon-Wed', 'mon' => 1, 'tue' => 1, 'wed' => 1, 'thu' => 0, 'fri' => 0, 'sat' => 0, 'sun' => 0]);
+        DB::update('employees', ['work_pattern_id' => $part], 'id = ?', [self::$f['empB']]);
+        $this->assertSame(17.0, LeaveService::annualSummary(self::$f['empB'], '2026-06-01')['entitlement']);
+        DB::update('employees', ['start_date' => '2026-07-01', 'work_pattern_id' => self::$f['pattern']], 'id = ?', [self::$f['empAdmin']]);
+        $this->assertSame(14.5, LeaveService::annualSummary(self::$f['empAdmin'], '2026-08-01')['entitlement']);
     }
 
     public function testApproveDeductsAndCancelReverses(): void
     {
         $id = LeaveService::request(self::$f['empA'], ['leave_type_id' => self::$f['annual'], 'start_date' => '2026-11-02', 'end_date' => '2026-11-06'], self::$f['userA']);
         $this->assertSame(5.0, (float) DB::value('SELECT days FROM leave_requests WHERE id = ?', [$id]));
-        $this->assertSame(15.0, LeaveService::annualSummary(self::$f['empA'], '2026-06-01')['available']);
+        $this->assertSame(23.0, LeaveService::annualSummary(self::$f['empA'], '2026-06-01')['available']);
         LeaveService::approve($id, $this->user('admin'), null);
-        $this->assertSame(15.0, LeaveService::annualSummary(self::$f['empA'], '2026-06-01')['remaining']);
+        $this->assertSame(23.0, LeaveService::annualSummary(self::$f['empA'], '2026-06-01')['remaining']);
         LeaveService::cancel($id, $this->user('admin'), true);
-        $this->assertSame(20.0, LeaveService::annualSummary(self::$f['empA'], '2026-06-01')['remaining']);
+        $this->assertSame(28.0, LeaveService::annualSummary(self::$f['empA'], '2026-06-01')['remaining']);
         $types = DB::column('SELECT DISTINCT CAST(entry_type AS CHAR) FROM leave_ledger WHERE employee_id = ?', [self::$f['empA']]);
         sort($types);
-        $this->assertSame(['accrual', 'bank_holiday', 'deduction', 'reversal'], $types);
+        $this->assertSame(['accrual', 'deduction', 'reversal'], $types);
     }
 
     public function testCannotBookMoreThanAvailable(): void
@@ -300,15 +309,18 @@ final class BusinessRulesTest extends FeatureTestCase
         $this->assertSame('Cara', DB::value('SELECT first_name FROM employees WHERE id = ?', [$id]));
     }
 
-    public function testEmployeeCanMaintainOnlyTheirOwnHistory(): void
+    public function testMyProfileIsReadOnlyForEmployees(): void
     {
+        DB::insert('employee_work_experience', ['employee_id' => self::$f['empA'], 'company_name' => 'Old Ltd', 'job_title' => 'Driver', 'from_date' => '2018-01-01', 'to_date' => '2019-01-01']);
         $this->actingAs(self::$f['userA']);
-        $res = $this->post('/my/history', ['experience' => [['company_name' => 'Mine Ltd', 'job_title' => 'Driver', 'from_date' => '2018-01-01', 'to_date' => '2019-01-01']],
-            'education' => [['institute_name' => 'My College', 'education_level' => 'GCSE']], 'employee_id' => (string) self::$f['empB']]);
-        $this->assertSame(302, $res->status);
-        $this->assertSame('Mine Ltd', DB::value('SELECT company_name FROM employee_work_experience WHERE employee_id = ?', [self::$f['empA']]));
-        $this->assertSame(0, (int) DB::value("SELECT COUNT(*) FROM employee_work_experience WHERE employee_id = ? AND company_name = 'Mine Ltd'", [self::$f['empB']]));
-        $this->assertSame(200, $this->get('/my/history')->status);
+        $page = $this->get('/my/profile');
+        $this->assertSame(200, $page->status);
+        $this->assertStringContainsString('Old Ltd', $page->body);   // shown
+        $this->assertStringNotContainsString('Add / edit', $page->body);   // but not editable
+        $this->assertStringContainsString('Your profile is read only', $page->body);
+        $this->assertSame(404, $this->get('/my/history')->status);
+        $this->assertNotSame(302, $this->post('/my/history', ['experience' => [['company_name' => 'Mine Ltd', 'job_title' => 'Driver', 'from_date' => '2018-01-01']]])->status);
+        $this->assertSame(0, (int) DB::value("SELECT COUNT(*) FROM employee_work_experience WHERE company_name = 'Mine Ltd'"));
     }
 
     public function testOrganisationChartIsViewOnlyForEmployees(): void
@@ -457,10 +469,10 @@ final class BusinessRulesTest extends FeatureTestCase
         $this->assertStringContainsString('Cass Break', $filtered);
         $this->assertStringNotContainsString('Bob Driver', $filtered);
         $report = $this->get('/reports/headcount')->body;
-        $this->assertStringContainsString('Career break', $report);
+        $this->assertStringContainsString('<th>Career Break</th>', $report);   // one column per status, named as in Settings
         // The employee import accepts the label too.
         [$input] = (fn () => [\App\Services\EmployeeTransfer::currentInput(DB::one('SELECT * FROM employees WHERE id = ?', [$id]))])();
         $this->assertSame('career_break', $input['status']);
-        $this->assertSame('Career Break', \App\Services\EmployeeService::STATUSES['career_break']);
+        $this->assertSame('Career Break', \App\Services\EmployeeService::statuses()['career_break']);
     }
 }

@@ -57,7 +57,7 @@ final class EmployeeTransfer
             'location' => ['Location', 'text'],
             'reporting_manager' => ['Reporting Manager', 'manager'],
             'employment_type' => ['Employment Type', 'enum', EmployeeService::TYPES],
-            'status' => ['Status', 'enum', EmployeeService::STATUSES],
+            'status' => ['Status', 'enum', EmployeeService::statuses(true)],
             'start_date' => ['Date of Joining', 'date'],
             'probation_end_date' => ['Probation End Date', 'date'],
             'end_date' => ['Date of Exit', 'date'],

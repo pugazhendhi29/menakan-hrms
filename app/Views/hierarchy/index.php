@@ -30,7 +30,7 @@ $deptName = array_column($departments, 'name', 'id');
 $card = function (array $p, int $reports, bool $compact = false) use ($isAdmin, $myEmployeeId, $matches, $filtering, $colourOf): string {
     $id = (int) $p['id'];
     $href = $isAdmin ? url('/employees/' . $id . '?tab=personal') : ($myEmployeeId === $id ? url('/my/profile') : null);
-    $name = trim(($p['preferred_name'] ?: $p['first_name']) . ' ' . $p['last_name']);
+    $name = trim($p['first_name'] . ' ' . $p['last_name']);
     $notes = [];
     $director = App\Services\OrgChart::isDirector($p['designation']);
     if ($director && ($p['line_manager_id'] !== null || $p['reporting_manager_name'])) {
@@ -45,7 +45,7 @@ $card = function (array $p, int $reports, bool $compact = false) use ($isAdmin, 
         $notes[] = '<span class="badge text-bg-light border"' . ($reports ? ' title="Not a Director, so they should normally have a reporting manager"' : '') . '>No reporting manager</span>';
     }
     if ($p['status'] !== 'active') {
-        $notes[] = status_badge($p['status']);
+        $notes[] = employee_status_badge($p['status']);
     }
     $cls = 'org-card' . ($director ? ' is-director' : '') . ($reports ? ' is-manager' : '') . ($filtering && isset($matches[$id]) ? ' is-match' : '') . ($filtering && !isset($matches[$id]) ? ' is-context' : '') . ($compact ? ' compact' : '');
     $style = ' style="--fn:' . $colourOf($p['department_id'] !== null ? (int) $p['department_id'] : null) . '"';
@@ -119,7 +119,12 @@ foreach ($byId as $p) {
     $usedDepts[(int) ($p['department_id'] ?? 0)] = true;
 }
 ?>
+<?php
+$circle = $request->str('view') === 'circle';
+$viewUrl = fn (string $v) => url('/hierarchy') . '?' . http_build_query(array_filter(['q' => $request->str('q'), 'department_id' => $request->str('department_id'), 'view' => $v === 'circle' ? 'circle' : null]));
+?>
 <form class="filters toolbar" method="get" action="<?= e(url('/hierarchy')) ?>" role="search">
+  <?php if ($circle): ?><input type="hidden" name="view" value="circle"><?php endif; ?>
   <div class="flex-grow-1" style="min-width:220px"><label class="form-label" for="q">Search by name</label>
     <input class="form-control form-control-sm" id="q" name="q" value="<?= e($request->str('q')) ?>" placeholder="Employee name or ID"></div>
   <div><label class="form-label" for="department_id">Department</label>
@@ -127,10 +132,12 @@ foreach ($byId as $p) {
       <?php foreach ($departments as $d): ?><option value="<?= e($d['id']) ?>"<?= selected($d['id'], $request->str('department_id')) ?>><?= e($d['name']) ?></option><?php endforeach; ?>
     </select></div>
   <button class="btn btn-sm btn-primary" type="submit"><i class="bi bi-search"></i> Search</button>
-  <?php if ($filtering): ?><a class="btn btn-sm btn-link" href="<?= e(url('/hierarchy')) ?>">Clear</a><?php endif; ?>
+  <?php if ($filtering): ?><a class="btn btn-sm btn-link" href="<?= e(url('/hierarchy' . ($circle ? '?view=circle' : ''))) ?>">Clear</a><?php endif; ?>
   <div class="ms-auto d-flex gap-2">
+    <?php if (!$circle): ?>
     <button type="button" class="btn btn-sm btn-outline-secondary" data-org-all="expand"><i class="bi bi-arrows-expand"></i> Expand all</button>
     <button type="button" class="btn btn-sm btn-outline-secondary" data-org-all="collapse"><i class="bi bi-arrows-collapse"></i> Collapse all</button>
+    <?php endif; ?>
     <div class="btn-group">
       <a class="btn btn-sm btn-primary" href="<?= e(url('/hierarchy/pdf')) ?>" data-pdf-export data-pdf-status="#pdf-status"><i class="bi bi-file-earmark-pdf"></i> <span>Export Hierarchy to PDF</span></a>
       <button type="button" class="btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false"><span class="visually-hidden">Choose paper size</span></button>
@@ -145,14 +152,6 @@ foreach ($byId as $p) {
 </form>
 <div id="pdf-status" class="pdf-status" role="status" aria-live="polite"></div>
 
-<div class="kpis">
-  <div class="kpi"><small>People in the structure</small><b><?= e($stats['people']) ?></b></div>
-  <div class="kpi"><small>Directors</small><b><?= e($stats['directors']) ?></b></div>
-  <div class="kpi"><small>Managers</small><b><?= e($stats['managers']) ?></b></div>
-  <div class="kpi"><small>Reporting levels</small><b><?= e($stats['levels']) ?></b></div>
-  <div class="kpi<?= $stats['unassigned'] ? ' warn-k' : '' ?>"><small>Without a manager</small><b><?= e($stats['unassigned']) ?></b><?php if ($stats['external']): ?><span class="badge text-bg-light border"><?= e($stats['external']) ?> report outside the system</span><?php endif; ?></div>
-</div>
-
 <?php if ($filtering): ?>
   <p class="mb-0 text-muted-2"><?= count($matches) ?> matching <?= count($matches) === 1 ? 'person' : 'people' ?>, shown in place with their reporting line. Matches are highlighted.</p>
 <?php endif; ?>
@@ -165,17 +164,24 @@ foreach ($byId as $p) {
 <?php if ($stats['people'] > 0 && (!$filtering || $shownRoots)): ?>
 <div class="card org-chart">
   <div class="card-header d-flex flex-wrap gap-3 align-items-center justify-content-start">
-    <span class="me-2">Functional hierarchy, top down</span>
+    <div class="btn-group btn-group-sm org-view-switch" role="group" aria-label="Chart layout">
+      <a class="btn btn-outline-secondary<?= $circle ? '' : ' active' ?>" href="<?= e($viewUrl('tree')) ?>"<?= $circle ? '' : ' aria-current="page"' ?>><i class="bi bi-diagram-3"></i> Tree</a>
+      <a class="btn btn-outline-secondary<?= $circle ? ' active' : '' ?>" href="<?= e($viewUrl('circle')) ?>"<?= $circle ? ' aria-current="page"' : '' ?>><i class="bi bi-bullseye"></i> Circle</a>
+    </div>
+    <span class="me-2"><?= $circle ? 'Circular view: Directors in the inner ring, their teams further out' : 'Functional hierarchy, top down' ?></span>
     <?php foreach ($departments as $d): if (!isset($usedDepts[(int) $d['id']])) continue; ?>
       <span class="org-legend" style="--fn:<?= e($colourOf((int) $d['id'])) ?>"><?= e($d['name']) ?></span>
     <?php endforeach; ?>
     <?php if (isset($usedDepts[0])): ?><span class="org-legend" style="--fn:<?= e($colourOf(null)) ?>">No department</span><?php endif; ?>
   </div>
+  <?php if ($circle): ?>
+    <?php if ($shownRoots): include __DIR__ . '/_radial.php'; else: ?><div class="empty">No Directors yet. Give the top people the designation "Director" and leave their reporting manager empty.</div><?php endif; ?>
+  <?php else: ?>
   <div class="card-body org-scroll">
     <ul class="org-tree" data-org-tree>
       <li class="org-root"><div class="org-node"><div class="org-company" role="img" aria-label="<?= e($company) ?>, top of the structure">
         <span class="org-company-mark"><img src="<?= e(asset('images/logo-mark.png')) ?>" alt=""></span>
-        <div><div class="org-company-name"><?= e($company) ?></div><div class="org-company-sub"><?= e($stats['directors']) ?> director<?= $stats['directors'] === 1 ? '' : 's' ?> · <?= e($stats['people']) ?> people</div></div>
+        <div><div class="org-company-name"><?= e($company) ?></div></div>
       </div></div>
         <?php if ($shownRoots): ?>
         <ul>
@@ -187,7 +193,12 @@ foreach ($byId as $p) {
       </li>
     </ul>
   </div>
+  <?php endif; ?>
+  <?php if ($circle): ?>
+  <div class="card-footer small text-muted-2">Read from the centre: <?= e($company) ?>, then its Directors on the first ring, then each person's team on the next ring out, near their manager. Each person's circle and line are in their department's colour. Pinch or scroll to look closer on a small screen.</div>
+  <?php else: ?>
   <div class="card-footer small text-muted-2">Read from the top: <?= e($company) ?>, then its Directors (anyone whose designation includes "Director"; they report to no one), then each person's reports on the row below them. Where a manager's team spans several departments, the team is split into a coloured branch per function. Scroll sideways on a small screen.</div>
+  <?php endif; ?>
 </div>
 <?php endif; ?>
 

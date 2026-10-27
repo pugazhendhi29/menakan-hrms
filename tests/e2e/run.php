@@ -200,9 +200,9 @@ t('TC-15', 'Pages', 'Every admin page opens without an error', 'HTTP 200 for all
     }
     return [!$bad, $bad ? implode(', ', $bad) : count($pages) . ' pages OK'];
 });
-t('TC-16', 'Pages', 'Every employee portal page opens without an error', 'HTTP 200 for 9 portal screens', function () use ($staff) {
+t('TC-16', 'Pages', 'Every employee portal page opens without an error', 'HTTP 200 for 8 portal screens (notifications are admin-only)', function () use ($staff) {
     $bad = [];
-    foreach (['/my', '/my/profile', '/my/documents', '/my/attendance', '/my/shifts', '/my/leave', '/my/payslips', '/account/password', '/notifications'] as $p) {
+    foreach (['/my', '/my/profile', '/my/documents', '/my/attendance', '/my/shifts', '/my/leave', '/my/payslips', '/account/password'] as $p) {
         if ($staff->get($p)->status !== 200) {
             $bad[] = "$p={$staff->status}";
         }
@@ -376,12 +376,12 @@ t('TC-37', 'Shifts', 'Month view puts days from the previous month in the first 
     preg_match_all('/<span class="dn">(\d+)<\/span>/', $admin->body, $m);
     return [($m[1][0] ?? '') === '28' && contains($admin, 'Week total'), 'first day cell=' . ($m[1][0] ?? '-')];
 });
-t('TC-38', 'Shifts', 'Publish the week\'s drafts and notify the employee', '6 shifts published; employee gets a notification', function () use ($admin, &$ctx) {
+t('TC-38', 'Shifts', 'Publish the week\'s drafts (new shifts are not notified)', '6 shifts published; no notification for new shifts', function () use ($admin, &$ctx) {
     $admin->get('/shifts?view=week&date=2026-10-19');
     $admin->post('/shifts/publish', ['date' => '2026-10-19', 'employee_id' => (string) $ctx['emp']['id'], 'department_id' => ''])->follow();
     $n = (int) DB::value("SELECT COUNT(*) FROM shifts WHERE employee_id = ? AND week_start = '2026-10-19' AND status = 'published'", [$ctx['emp']['id']]);
     $note = DB::value("SELECT n.id FROM notifications n JOIN users u ON u.id = n.user_id WHERE u.employee_id = ? AND n.title = 'New shifts published'", [$ctx['emp']['id']]);
-    return [$n === 6 && $note, "published=$n, notification=" . ($note ? 'yes' : 'no')];
+    return [$n === 6 && !$note, "published=$n, notification=" . ($note ? 'yes' : 'no')];
 });
 
 // =================================================================== ATTENDANCE
@@ -537,7 +537,7 @@ t('TC-54', 'Leave', 'Admin approves; balance drops and the employee is notified'
     $after = $bal()['remaining'];
     $ledger = DB::value("SELECT days FROM leave_ledger WHERE leave_request_id = ? AND entry_type = 'deduction'", [$id]);
     $note = DB::value("SELECT n.id FROM notifications n JOIN users u ON u.id = n.user_id WHERE u.employee_id = ? AND n.title = 'Leave approved'", [$daniel['id']]);
-    return [abs($before - $after - 2) < 0.001 && (float) $ledger === -2.0 && $note, "remaining $before -> $after; ledger=$ledger"];
+    return [abs($before - $after - 2) < 0.001 && (float) $ledger === -2.0 && !$note, "remaining $before -> $after; ledger=$ledger; no employee notification"];
 });
 t('TC-55', 'Leave', 'An admin cannot approve their own leave', 'HTTP 403 "cannot approve or reject your own leave request"', function () use ($admin, $annual) {
     $me = (int) DB::value("SELECT employee_id FROM users WHERE username = ?", [getenv('E2E_ADMIN_USER') ?: 'admin']);
@@ -807,18 +807,11 @@ t('TC-86', 'Hierarchy', 'Missing managers and photos are handled', 'Person with 
         && contains($admin, 'Reports to Agency supervisor (Hays)') && contains($admin, '>LM</span>');
     return [$ok, $ok ? 'handled' : 'missing expected labels'];
 });
-t('TC-87', 'Profile', 'Employee adds their own work experience and education in the portal', 'My Profile → Add/edit: two experience rows (Add Another) and one education saved for themselves only; bad email refused', function () use ($staff, $daniel) {
-    $staff->get('/my/history');
-    $form = contains($staff, 'Add Another Work Experience') && contains($staff, 'Add Another Education') && contains($staff, 'Reference mobile number');
-    $staff->post('/my/history', ['experience' => [['company_name' => 'Old Co', 'job_title' => 'Driver', 'from_date' => '2015-01-01', 'to_date' => '2016-01-01', 'reference_email' => 'bad']]])->follow();
-    $refused = contains($staff, 'Reference email must be a valid email address');
-    $staff->post('/my/history', ['experience' => [
-        ['company_name' => 'Old Co', 'job_title' => 'Driver', 'from_date' => '2015-01-01', 'to_date' => '2016-01-01', 'reference_phone_code' => '+353', 'reference_phone' => '087 123 4567'],
-        ['company_name' => 'Older Co', 'job_title' => 'Porter', 'from_date' => '2012-01-01', 'to_date' => '2014-12-31'],
-    ], 'education' => [['institute_name' => 'Dublin Tech', 'education_level' => 'Diploma']]])->follow();
-    $rows = DB::all('SELECT * FROM employee_work_experience WHERE employee_id = ? ORDER BY from_date', [$daniel['id']]);
-    $ok = $form && $refused && count($rows) === 2 && $rows[1]['reference_phone'] === '+353 871234567' && contains($staff, 'Dublin Tech');
-    return [$ok, 'rows=' . count($rows) . ' phone=' . ($rows[1]['reference_phone'] ?? '-') . ' refused bad email=' . ($refused ? 'yes' : 'no')];
+t('TC-87', 'Profile', 'My Profile is read only for the employee', 'Work experience and education are shown with no Add/edit buttons; the old edit page is gone (404)', function () use ($staff) {
+    $staff->get('/my/profile');
+    $readOnly = contains($staff, 'Work experience') && contains($staff, 'Education details') && !contains($staff, 'Add / edit') && contains($staff, 'Your profile is read only');
+    $gone = $staff->get('/my/history')->status === 404;
+    return [$readOnly && $gone, 'read only=' . ($readOnly ? 'yes' : 'no') . ', /my/history=' . $staff->status];
 });
 t('TC-88', 'Leave', 'Book leave with a Requested Date and an Approved Date', 'Saved as approved with both dates; approved date before the requested date is refused', function () use ($admin, $annual) {
     $emp = (int) DB::value("SELECT id FROM employees WHERE employee_code = 'MT0013'");

@@ -64,24 +64,6 @@ final class MyController extends Controller
             'educationRows' => DB::all('SELECT * FROM employee_education WHERE employee_id = ? ORDER BY completion_date DESC', [$me['id']])]);
     }
 
-    /** Employees may maintain their own work experience and education (nothing else in their record). */
-    public function history(Request $request): Response
-    {
-        $id = (int) Auth::employeeId();
-        return view('my/history', ['title' => 'My work experience & education', 'crumb' => 'My Profile',
-            'experienceRows' => DB::all('SELECT * FROM employee_work_experience WHERE employee_id = ? ORDER BY is_current DESC, from_date DESC', [$id]),
-            'educationRows' => DB::all('SELECT * FROM employee_education WHERE employee_id = ? ORDER BY completion_date IS NULL, completion_date DESC', [$id])]);
-    }
-
-    public function saveHistory(Request $request): Response
-    {
-        return $this->attempt($request, '/my/history', function () use ($request) {
-            \App\Services\EmployeeService::saveHistoryFromInput((int) Auth::employeeId(), ['experience' => $request->arr('experience'), 'education' => $request->arr('education')], $this->userId());
-            flash('success', 'Your work experience and education have been saved.');
-            return redirect('/my/profile#experience');
-        });
-    }
-
     public function documents(Request $request): Response
     {
         $me = $this->me();

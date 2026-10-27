@@ -2,7 +2,7 @@
   <div class="col-lg-6">
     <div class="card">
       <div class="card-header"><?= e($a['employee_code'] . ' ' . employee_name($a)) ?> · <?= e(uk_date($a['work_date'])) ?>
-        <a class="btn btn-sm btn-outline-secondary" href="<?= e(url('/attendance/' . $a['id'] . '/edit')) ?>">Correct</a></div>
+        <?php if (!$locked): ?><a class="btn btn-sm btn-outline-secondary" href="<?= e(url('/attendance/' . $a['id'] . '/edit')) ?>">Correct</a><?php endif; ?></div>
       <div class="card-body"><dl class="dl-grid">
         <dt>Check in</dt><dd><?= e(uk_datetime($a['check_in_at'])) ?></dd>
         <dt>Check out</dt><dd><?= e(uk_datetime($a['check_out_at'])) ?></dd>
@@ -10,11 +10,23 @@
         <dt>Net hours</dt><dd><?= e(hours($a['net_minutes'] === null ? null : (int) $a['net_minutes'])) ?></dd>
         <dt>Status</dt><dd><?= status_badge($a['status']) ?></dd>
         <dt>Linked shift</dt><dd><?= $a['shift_start'] ? e(uk_datetime($a['shift_start']) . '–' . uk_time($a['shift_end'])) : 'None' ?></dd>
-        <dt>Source</dt><dd><?= e(ucfirst($a['source'])) ?><?= $a['import_batch_id'] ? ' · <a href="' . e(url('/attendance-import/' . $a['import_batch_id'])) . '">batch #' . e($a['import_batch_id']) . '</a>' : '' ?></dd>
+        <dt>Source</dt><dd><?= $a['source'] === 'rota' ? 'From rota (the published shift)' : e(ucfirst($a['source'])) ?><?= $a['import_batch_id'] ? ' · <a href="' . e(url('/attendance-import/' . $a['import_batch_id'])) . '">batch #' . e($a['import_batch_id']) . '</a>' : '' ?></dd>
         <dt>Approved</dt><dd><?= $a['is_approved'] ? 'Yes · ' . e($a['approved_by_name'] ?? '') . ' ' . e(uk_datetime($a['approved_at'])) : 'No' ?></dd>
         <dt>Notes</dt><dd><?= e($a['notes'] ?: '—') ?></dd>
       </dl></div>
     </div>
+    <?php if ($locked): ?>
+      <div class="alert alert-info mt-3 mb-0"><i class="bi bi-lock"></i> Recorded from the rota. It follows the shift, and can only be changed on a day the employee is on approved leave.</div>
+    <?php elseif ($a['source'] === 'rota' && $onLeave): ?>
+      <form method="post" action="<?= e(url('/attendance/' . $a['id'] . '/remove')) ?>" class="card mt-3" data-confirm="Remove this attendance? The employee was on leave and did not work this shift.">
+        <?= csrf_field() ?>
+        <div class="card-header">The employee was on leave this day</div>
+        <div class="card-body"><label class="form-label req" for="reason">Reason</label>
+          <input class="form-control<?= is_invalid('reason') ?>" id="reason" name="reason" maxlength="200" required value="<?= e(old('reason', 'On approved leave')) ?>"><?= field_error('reason') ?>
+          <div class="form-text">Removes this rota attendance. Or use Correct to change the times.</div></div>
+        <div class="card-footer"><button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i> Remove attendance</button></div>
+      </form>
+    <?php endif; ?>
   </div>
   <div class="col-lg-6">
     <div class="card">

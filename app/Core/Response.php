@@ -72,7 +72,7 @@ final class Response
     public function send(): void
     {
         // Explicit status line: some SAPIs turn unknown codes such as 419 into 500.
-        $reasons = [200 => 'OK', 302 => 'Found', 400 => 'Bad Request', 403 => 'Forbidden', 404 => 'Not Found', 405 => 'Method Not Allowed', 419 => 'Page Expired', 500 => 'Internal Server Error'];
+        $reasons = [200 => 'OK', 302 => 'Found', 304 => 'Not Modified', 400 => 'Bad Request', 403 => 'Forbidden', 404 => 'Not Found', 405 => 'Method Not Allowed', 419 => 'Page Expired', 500 => 'Internal Server Error'];
         if (!headers_sent()) {
             header(sprintf('%s %d %s', $_SERVER['SERVER_PROTOCOL'] ?? 'HTTP/1.1', $this->status, $reasons[$this->status] ?? 'Status'), true, $this->status);
         }

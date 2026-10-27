@@ -12,7 +12,7 @@ $editable = !$e['deleted_at'];
   <div class="col-xl-3 col-lg-4">
     <div class="card h-100"><div class="card-body d-flex flex-column align-items-center gap-2 text-center">
       <?php if ($e['photo_key']): ?>
-        <img class="photo-lg" src="<?= e(url('/files/photo/' . $e['id']) . '?v=' . substr(md5($e['photo_key']), 0, 8)) ?>" alt="Photo of <?= e(employee_name($e)) ?>">
+        <img class="photo-lg" src="<?= e(employee_photo_url($e, 132)) ?>" alt="Photo of <?= e(employee_name($e)) ?>">
       <?php else: ?>
         <div class="photo-lg" aria-label="No photo"><?= e(mb_substr($e['first_name'], 0, 1) . mb_substr($e['last_name'], 0, 1)) ?></div>
       <?php endif; ?>
@@ -57,7 +57,7 @@ $editable = !$e['deleted_at'];
             <dt>Location</dt><dd><?= $dd($e['location_name']) ?></dd>
             <dt>Designation</dt><dd><?= $dd($e['job_title']) ?></dd>
             <dt>Employment type</dt><dd><?= e(EmployeeService::TYPES[$e['employment_type']] ?? $e['employment_type']) ?></dd>
-            <dt>Employee status</dt><dd><?= status_badge($e['status']) ?></dd>
+            <dt>Employee status</dt><dd><?= employee_status_badge($e['status']) ?></dd>
           </dl>
           <dl class="dl-grid col-xl-6 mb-0">
             <dt>Source of hire</dt><dd><?= $dd($e['source_of_hire']) ?></dd>

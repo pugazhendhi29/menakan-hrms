@@ -52,7 +52,7 @@ final class EmployeeController extends Controller
         $status = $request->str('status', 'current');
         if ($status === 'current') {
             $where[] = "e.status <> 'left'";
-        } elseif (isset(EmployeeService::STATUSES[$status])) {
+        } elseif (isset(EmployeeService::statuses(true)[$status])) {
             $where[] = 'e.status = ?';
             $params[] = $status;
         }
@@ -189,7 +189,6 @@ final class EmployeeController extends Controller
                 break;
             case 'leave':
                 $data['requests'] = DB::all('SELECT lr.*, lt.name AS type_name FROM leave_requests lr JOIN leave_types lt ON lt.id = lr.leave_type_id WHERE lr.employee_id = ? ORDER BY lr.start_date DESC', [$id]);
-                $data['ledger'] = DB::all('SELECT l.*, lt.name AS type_name FROM leave_ledger l JOIN leave_types lt ON lt.id = l.leave_type_id WHERE l.employee_id = ? ORDER BY l.leave_year DESC, l.created_at DESC, l.id DESC', [$id]);
                 $data['leaveTypes'] = DB::all('SELECT id, name FROM leave_types WHERE deducts_balance = 1 ORDER BY sort_order, name');
                 break;
             case 'payslips':

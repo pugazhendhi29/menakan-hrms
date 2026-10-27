@@ -1,5 +1,5 @@
 <div class="kpis">
-  <div class="kpi"><small>Entitlement <?= e($summary['year']) ?></small><b><?= e(days_fmt($summary['entitlement'])) ?></b><span class="badge text-bg-light border">includes <?= e(days_fmt($summary['bank_holidays'])) ?> bank holidays</span></div>
+  <div class="kpi"><small>Entitlement <?= e($summary['year']) ?></small><b><?= e(days_fmt($summary['entitlement'])) ?></b><span class="badge text-bg-light border">plus bank holidays</span></div>
   <div class="kpi ok-k"><small>Remaining</small><b><?= e(days_fmt($summary['remaining'])) ?></b></div>
   <div class="kpi warn-k"><small>Pending approval</small><b><?= e(days_fmt($summary['pending'])) ?></b></div>
   <div class="kpi"><small>Available to request</small><b><?= e(days_fmt($summary['available'])) ?></b></div>

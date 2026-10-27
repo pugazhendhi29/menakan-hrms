@@ -95,6 +95,30 @@
       document.querySelectorAll('[data-audience-panel]').forEach(function (p) { p.hidden = p.getAttribute('data-audience-panel') !== r.value; });
     });
   });
+  // Show the panel for the chosen option: <input type="radio" data-switch="group" value="x"> + <div data-switch-panel="group:x">
+  document.querySelectorAll('[data-switch]').forEach(function (r) {
+    r.addEventListener('change', function () {
+      var g = r.getAttribute('data-switch');
+      document.querySelectorAll('[data-switch-panel^="' + g + ':"]').forEach(function (p) { p.hidden = p.getAttribute('data-switch-panel') !== g + ':' + r.value; });
+    });
+  });
+  // New email: preview the signature of the chosen sender (<select data-signature-from> options carry data-signature).
+  var sigPreview = document.getElementById('signature-preview');
+  if (sigPreview) {
+    var showSignature = function () {
+      var text = '';
+      document.querySelectorAll('select[data-signature-from]').forEach(function (s) {
+        var panel = s.closest('[data-switch-panel]');
+        if (!panel || !panel.hidden) {
+          var o = s.options[s.selectedIndex];
+          text = o ? (o.getAttribute('data-signature') || '') : '';
+        }
+      });
+      sigPreview.textContent = text || sigPreview.getAttribute('data-empty');
+    };
+    document.querySelectorAll('select[data-signature-from], [data-switch="sender"]').forEach(function (el) { el.addEventListener('change', showSignature); });
+    showSignature();
+  }
   // Confirm before a specific submit button: <button data-confirm-click="Sure?">
   document.querySelectorAll('[data-confirm-click]').forEach(function (b) {
     b.addEventListener('click', function (e) {

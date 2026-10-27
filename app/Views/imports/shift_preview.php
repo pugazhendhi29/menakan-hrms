@@ -4,7 +4,7 @@
   <a class="kpi" href="<?= e($base) ?>"><small>Rows read</small><b><?= e($batch['total_rows']) ?></b></a>
   <a class="kpi ok-k" href="<?= e($base . '?result=' . ($pending ? 'ready' : 'imported')) ?>"><small><?= $pending ? 'Valid' : 'Imported' ?></small><b><?= e($pending ? $batch['valid_rows'] : $batch['imported_rows']) ?></b></a>
   <a class="kpi warn-k" href="<?= e($base . '?result=warning') ?>"><small>Over weekly limit</small><b><?= e($warnings) ?></b></a>
-  <a class="kpi warn-k" href="<?= e($base . '?result=duplicate') ?>"><small>Duplicates</small><b><?= e($batch['duplicate_rows']) ?></b></a>
+  <a class="kpi warn-k" href="<?= e($base . '?result=duplicate') ?>"><small>Already in the system</small><b><?= e($batch['duplicate_rows']) ?></b></a>
   <a class="kpi alert-k" href="<?= e($base . '?result=error') ?>"><small>Errors</small><b><?= e($batch['error_rows']) ?></b></a>
 </div>
 <div class="card"><div class="table-responsive"><table class="table">
@@ -21,7 +21,7 @@
       <td><?= e($r['end_at'] ? uk_time($r['end_at']) : $rawv('end')) ?><?= $r['start_at'] && from_utc($r['end_at'])->format('Y-m-d') !== from_utc($r['start_at'])->format('Y-m-d') ? ' <small>(+1)</small>' : '' ?></td>
       <td class="num"><?= e($r['break_minutes']) ?></td><td class="num"><?= e($r['net_minutes'] === null ? '—' : hours((int) $r['net_minutes'])) ?></td>
       <td><?= e($r['type_code'] ?: $rawv('shift_type')) ?></td><td><?= e($r['location_name'] ?: $rawv('location')) ?></td><td><?= e(ucfirst((string) $r['status'])) ?></td>
-      <td><?php if ($r['result'] === 'error'): ?><span class="text-danger small fw-semibold"><?= e($r['messages']) ?></span><?php else: ?><?= status_badge($r['result']) ?> <?= $r['messages'] ? '<small>' . e($r['messages']) . '</small>' : '' ?><?php endif; ?></td>
+      <td><?php if ($r['result'] === 'error'): ?><span class="text-danger small fw-semibold"><?= e($r['messages']) ?></span><?php elseif ($r['shift_id'] && in_array($r['result'], ['ready', 'warning'], true)): ?><span class="badge rounded-pill text-bg-info">Update</span><?= $r['result'] === 'warning' ? ' ' . status_badge('warning') : '' ?> <?= $r['messages'] ? '<small>' . e($r['messages']) . '</small>' : '' ?><?php else: ?><?= status_badge($r['result'] === 'duplicate' ? 'unchanged' : $r['result']) ?> <?= $r['messages'] ? '<small>' . e($r['messages']) . '</small>' : '' ?><?php endif; ?></td>
     </tr>
   <?php endforeach; ?>
   <?php if (!$rows): ?><tr><td colspan="11" class="empty">No rows for this filter.</td></tr><?php endif; ?>
@@ -37,6 +37,7 @@
       <div id="reason-box"><input class="form-control form-control-sm" name="reason" placeholder="Reason for approving the extra hours" maxlength="200" aria-label="Reason"></div>
       <small class="text-muted-2">Without approval, over-limit rows are skipped.</small>
     <?php endif; ?>
+    <small class="text-muted-2">Shifts already in the system are updated where the file differs; unchanged ones are left as they are.</small>
     <div><button class="btn btn-primary" type="submit">Import valid shifts</button></div>
   </form>
   <?php else: ?><span class="text-muted-2">Status: <?= status_badge($batch['status']) ?> <?= e(uk_datetime($batch['confirmed_at'])) ?></span><?php endif; ?>

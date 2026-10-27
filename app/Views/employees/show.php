@@ -20,7 +20,7 @@ $base = url('/employees/' . $e['id']);
       <div class="text-muted-2"><?= e($e['job_title']) ?> · <?= e($e['department']) ?> · started <?= e(uk_date($e['start_date'])) ?></div>
     </div>
     <div class="d-flex gap-2 flex-wrap">
-      <?= status_badge($e['status']) ?>
+      <?= employee_status_badge($e['status']) ?>
       <span class="badge text-bg-<?= e($cCls) ?>">Documents <?= e($cLabel) ?></span>
     </div>
     <?php if (!$e['deleted_at']): ?>
@@ -73,8 +73,9 @@ $base = url('/employees/' . $e['id']);
   <dt>Date of joining</dt><dd><?= e(uk_date($e['start_date'])) ?></dd>
   <dt>Probation ends</dt><dd><?= e(uk_date($e['probation_end_date'])) ?></dd>
   <dt>Date of exit</dt><dd><?= e(uk_date($e['end_date'])) ?><?= $e['leaving_reason'] ? ' · ' . e($e['leaving_reason']) : '' ?></dd>
-  <dt>Status</dt><dd><?= status_badge($e['status']) ?></dd>
-  <dt>Salary <span class="badge text-bg-danger">Admin</span></dt><dd><?= e(money($e['salary'])) ?> <?= e(EmployeeService::PAY_FREQ[$e['pay_frequency']] ?? '') ?></dd>
+  <dt>Status</dt><dd><?= employee_status_badge($e['status']) ?></dd>
+  <dt>Annual salary <span class="badge text-bg-danger">Admin</span></dt><dd><?= e($e['salary'] !== null ? money($e['salary']) : '—') ?></dd>
+  <dt>Pay frequency <span class="badge text-bg-danger">Admin</span></dt><dd><?= e(EmployeeService::PAY_FREQ[$e['pay_frequency']] ?? '—') ?></dd>
   <dt>Payroll reference</dt><dd><?= e($e['payroll_reference'] ?: '—') ?></dd>
   <dt>Notes</dt><dd><?= nl2br(e($e['notes'] ?: '—')) ?></dd>
 </dl></div></div>
@@ -129,7 +130,7 @@ $base = url('/employees/' . $e['id']);
 <?php elseif ($tab === 'leave'): ?>
 <?php if ($leaveSummary): ?>
 <div class="kpis">
-  <div class="kpi"><small>Entitlement <?= e($leaveSummary['year']) ?></small><b><?= e(days_fmt($leaveSummary['entitlement'])) ?></b><span class="badge text-bg-light border">incl. <?= e(days_fmt($leaveSummary['bank_holidays'])) ?> bank holidays</span></div>
+  <div class="kpi"><small>Entitlement <?= e($leaveSummary['year']) ?></small><b><?= e(days_fmt($leaveSummary['entitlement'])) ?></b><span class="badge text-bg-light border">+ bank holidays</span></div>
   <div class="kpi ok-k"><small>Remaining</small><b><?= e(days_fmt($leaveSummary['remaining'])) ?></b></div>
   <div class="kpi warn-k"><small>Pending</small><b><?= e(days_fmt($leaveSummary['pending'])) ?></b></div>
   <div class="kpi"><small>Available to book</small><b><?= e(days_fmt($leaveSummary['available'])) ?></b></div>
@@ -153,16 +154,10 @@ $base = url('/employees/' . $e['id']);
         <div class="col-8"><label class="form-label" for="adj_note">Reason</label><input class="form-control form-control-sm" id="adj_note" name="note" maxlength="255" required></div>
         <div class="col-12 d-flex gap-2"><button class="btn btn-sm btn-primary">Add adjustment</button></div>
       </form>
-      <form method="post" action="<?= e($base . '/leave/recalculate') ?>" class="mt-2" data-confirm="Recalculate this year's entitlement and bank holiday entries from the current settings?"><?= csrf_field() ?><button class="btn btn-sm btn-outline-secondary">Recalculate entitlement</button></form>
+      <form method="post" action="<?= e($base . '/leave/recalculate') ?>" class="mt-2" data-confirm="Recalculate this year's entitlement from the leave rules (28 days a year, pro rata)?"><?= csrf_field() ?><button class="btn btn-sm btn-outline-secondary">Recalculate entitlement</button></form>
     </div></div>
   </div>
 </div>
-<div class="card"><div class="card-header">Leave ledger (every balance change)</div><div class="table-responsive"><table class="table table-sm">
-  <thead><tr><th>Year</th><th>Type</th><th>Entry</th><th class="num">Days</th><th>Note</th><th>Date</th></tr></thead><tbody>
-  <?php foreach ($ledger as $l): ?>
-    <tr><td><?= e($l['leave_year']) ?></td><td><?= e($l['type_name']) ?></td><td><?= e(ucfirst(str_replace('_', ' ', $l['entry_type']))) ?></td><td class="num <?= $l['days'] < 0 ? 'text-danger' : 'text-success' ?>"><?= e(($l['days'] > 0 ? '+' : '') . days_fmt($l['days'])) ?></td><td><?= e($l['note']) ?></td><td><?= e(uk_datetime($l['created_at'])) ?></td></tr>
-  <?php endforeach; ?>
-</tbody></table></div></div>
 
 <?php elseif ($tab === 'payslips'): ?>
 <div class="d-flex justify-content-end"><a class="btn btn-sm btn-hivis" href="<?= e(url('/payslips/upload?employee_id=' . $e['id'])) ?>"><i class="bi bi-upload"></i> Upload payslip</a></div>

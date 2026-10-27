@@ -29,7 +29,8 @@ final class DashboardController extends Controller
         $week = \App\Core\Validator::isDate($week) ? WeekBoundary::weekStartForDate($week) : WeekBoundary::weekStartForDate($today);
         $deptSql = $dept ? ' AND e.department_id = ' . (int) $dept : '';
 
-        $headcount = DB::one("SELECT COUNT(*) AS total, SUM(status IN ('active','probation','on_leave')) AS active FROM employees e WHERE deleted_at IS NULL AND status <> 'left' $deptSql");
+        $headcount = DB::one("SELECT COUNT(*) AS total, SUM(COALESCE(st.counts_as_working, 0)) AS active FROM employees e LEFT JOIN employee_statuses st ON st.code = e.status
+                                WHERE e.deleted_at IS NULL AND e.status <> 'left' $deptSql");
         [$dayStart, $dayEnd] = WeekBoundary::utcRangeForDates($today, $today);
         $rostered = (int) DB::value("SELECT COUNT(DISTINCT s.employee_id) FROM shifts s JOIN employees e ON e.id = s.employee_id WHERE s.status = 'published' AND s.start_at >= ? AND s.start_at < ? $deptSql", [$dayStart, $dayEnd]);
         $present = (int) DB::value("SELECT COUNT(DISTINCT a.employee_id) FROM attendance_records a JOIN employees e ON e.id = a.employee_id WHERE a.work_date = ? $deptSql", [$today]);

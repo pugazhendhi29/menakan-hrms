@@ -15,6 +15,7 @@ use App\Controllers\HierarchyController;
 use App\Controllers\WebmailController;
 use App\Controllers\IdCardController;
 use App\Controllers\NewsController;
+use App\Controllers\NewsThreadController;
 use App\Controllers\LeaveController;
 use App\Controllers\MyController;
 use App\Controllers\NotificationController;
@@ -44,9 +45,6 @@ return function (Router $r): void {
         $r->get('/', [DashboardController::class, 'home']);
         $r->get('/account/password', [AccountController::class, 'showPassword']);
         $r->post('/account/password', [AccountController::class, 'changePassword']);
-        $r->get('/notifications', [NotificationController::class, 'index']);
-        $r->post('/notifications/read-all', [NotificationController::class, 'readAll']);
-        $r->get('/notifications/{id}/open', [NotificationController::class, 'open']);
 
         // ---- Organisation chart (everyone signed in can view; only admins see edit links)
         $r->get('/hierarchy', [HierarchyController::class, 'index']);
@@ -65,8 +63,6 @@ return function (Router $r): void {
         $r->group(['employee'], function (Router $r) {
             $r->get('/my', [MyController::class, 'dashboard']);
             $r->get('/my/profile', [MyController::class, 'profile']);
-            $r->get('/my/history', [MyController::class, 'history']);
-            $r->post('/my/history', [MyController::class, 'saveHistory']);
             $r->get('/my/documents', [MyController::class, 'documents']);
             $r->get('/my/attendance', [MyController::class, 'attendance']);
             $r->post('/my/attendance/check-in', [MyController::class, 'checkIn']);
@@ -80,10 +76,18 @@ return function (Router $r): void {
             $r->get('/my/id-card', [IdCardController::class, 'my']);
             $r->get('/my/news', [NewsController::class, 'my']);
             $r->get('/my/news/{id}', [NewsController::class, 'myShow']);
+            $r->get('/my/news/threads/create', [NewsThreadController::class, 'myCreate']);
+            $r->post('/my/news/threads', [NewsThreadController::class, 'myStore']);
+            $r->get('/my/news/threads/{id}', [NewsThreadController::class, 'myShow']);
+            $r->post('/my/news/threads/{id}/reply', [NewsThreadController::class, 'myReply']);
         });
 
         // ---- Admin
         $r->group(['role:admin'], function (Router $r) {
+            // Notifications are for admins only (turned off for employees).
+            $r->get('/notifications', [NotificationController::class, 'index']);
+            $r->post('/notifications/read-all', [NotificationController::class, 'readAll']);
+            $r->get('/notifications/{id}/open', [NotificationController::class, 'open']);
             $r->get('/dashboard', [DashboardController::class, 'admin']);
 
             $r->get('/employees', [EmployeeController::class, 'index']);
@@ -122,6 +126,19 @@ return function (Router $r): void {
             $r->get('/news/templates/{id}/edit', [NewsController::class, 'templateEdit']);
             $r->post('/news/templates/{id}', [NewsController::class, 'templateUpdate']);
             $r->post('/news/templates/{id}/delete', [NewsController::class, 'templateDelete']);
+            $r->get('/news/threads', [NewsThreadController::class, 'index']);
+            $r->get('/news/threads/create', [NewsThreadController::class, 'create']);
+            $r->post('/news/threads', [NewsThreadController::class, 'store']);
+            $r->get('/news/threads/{id}', [NewsThreadController::class, 'show']);
+            $r->get('/news/threads/{id}/edit', [NewsThreadController::class, 'edit']);
+            $r->post('/news/threads/{id}', [NewsThreadController::class, 'update']);
+            $r->post('/news/threads/{id}/publish', [NewsThreadController::class, 'publish']);
+            $r->post('/news/threads/{id}/withdraw', [NewsThreadController::class, 'withdraw']);
+            $r->post('/news/threads/{id}/delete', [NewsThreadController::class, 'delete']);
+            $r->post('/news/threads/{id}/messages', [NewsThreadController::class, 'messageStore']);
+            $r->get('/news/threads/{id}/messages/{messageId}/edit', [NewsThreadController::class, 'messageEdit']);
+            $r->post('/news/threads/{id}/messages/{messageId}', [NewsThreadController::class, 'messageUpdate']);
+            $r->post('/news/threads/{id}/messages/{messageId}/delete', [NewsThreadController::class, 'messageDelete']);
             $r->get('/news/{id}', [NewsController::class, 'show']);
             $r->get('/news/{id}/edit', [NewsController::class, 'edit']);
             $r->post('/news/{id}', [NewsController::class, 'update']);
@@ -147,6 +164,7 @@ return function (Router $r): void {
             $r->get('/attendance/{id}', [AttendanceController::class, 'show']);
             $r->get('/attendance/{id}/edit', [AttendanceController::class, 'edit']);
             $r->post('/attendance/{id}', [AttendanceController::class, 'update']);
+            $r->post('/attendance/{id}/remove', [AttendanceController::class, 'remove']);
 
             $r->get('/attendance-import', [AttendanceImportController::class, 'index']);
             $r->get('/attendance-import/template', [AttendanceImportController::class, 'template']);

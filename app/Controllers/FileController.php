@@ -70,8 +70,52 @@ final class FileController extends Controller
         if (!$key || !FileStore::exists((string) $key)) {
             throw new HttpException(404);
         }
+        $path = FileStore::path((string) $key);
         $mime = str_ends_with((string) $key, '.png') ? 'image/png' : 'image/jpeg';
-        return Response::file(FileStore::path((string) $key), 'photo-' . $id . (str_ends_with((string) $key, '.png') ? '.png' : '.jpg'), $mime, true);
+        $name = 'photo-' . $id . (str_ends_with((string) $key, '.png') ? '.png' : '.jpg');
+        // Small copies for avatars (?s=64|128|256): a few KB instead of the full upload.
+        $size = $request->int('s');
+        if (in_array($size, self::PHOTO_SIZES, true) && ($thumb = self::photoThumb($path, (string) $key, $size))) {
+            [$path, $mime, $name] = [$thumb, 'image/webp', 'photo-' . $id . '-' . $size . '.webp'];
+        }
+        // The URL carries a version of the photo (?v=), so the browser may keep it: a new photo gets a new URL.
+        $etag = '"' . substr(sha1($key . '|' . $size), 0, 20) . '"';
+        $cache = ['Cache-Control' => 'private, max-age=31536000, immutable', 'Expires' => gmdate('D, d M Y H:i:s', time() + 31536000) . ' GMT', 'Pragma' => '', 'ETag' => $etag];
+        if (trim((string) ($request->server['HTTP_IF_NONE_MATCH'] ?? '')) === $etag) {
+            return new Response('', 304, $cache);
+        }
+        $r = Response::file($path, $name, $mime, true);
+        $r->headers = $cache + $r->headers;
+        return $r;
+    }
+
+    private const PHOTO_SIZES = [64, 128, 256];
+
+    /** A square WebP copy of the photo, made once and kept in storage/photos/thumbs. Null if it cannot be made. */
+    private static function photoThumb(string $path, string $key, int $size): ?string
+    {
+        $dir = \App\Core\Config::get('app.storage_path') . '/photos/thumbs';
+        $thumb = $dir . '/' . sha1($key) . '-' . $size . '.webp';
+        if (is_file($thumb)) {
+            return $thumb;
+        }
+        if (!function_exists('imagewebp') || !is_dir($dir) && !@mkdir($dir, 0755, true)) {
+            return null;
+        }
+        $src = @imagecreatefromstring((string) file_get_contents($path));
+        if (!$src) {
+            return null;
+        }
+        $w = imagesx($src);
+        $h = imagesy($src);
+        $side = min($w, $h);   // centre crop to a square, as the avatar circles show it
+        $out = imagecreatetruecolor($size, $size);
+        imagefill($out, 0, 0, imagecolorallocate($out, 255, 255, 255));
+        imagecopyresampled($out, $src, 0, 0, (int) (($w - $side) / 2), (int) (($h - $side) / 2), $size, $size, $side, $side);
+        $ok = imagewebp($out, $thumb . '.tmp', 82) && rename($thumb . '.tmp', $thumb);
+        imagedestroy($src);
+        imagedestroy($out);
+        return $ok ? $thumb : null;
     }
 
     /**

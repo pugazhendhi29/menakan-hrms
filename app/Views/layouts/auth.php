@@ -9,8 +9,8 @@ $flashes = Session::takeFlashes();
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?= e(($title ?? 'Sign in') . ' · Menakan Transport HR') ?></title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Semi+Condensed:wght@600;700&display=swap">
+<link rel="preload" href="<?= e(asset('fonts/inter-latin-6ab57b19.woff2')) ?>" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="<?= e(asset('css/fonts.css')) ?>">
 <link rel="stylesheet" href="<?= e(asset('vendor/bootstrap/bootstrap.min.css')) ?>">
 <link rel="stylesheet" href="<?= e(asset('vendor/bootstrap-icons/bootstrap-icons.min.css')) ?>">
 <link rel="stylesheet" href="<?= e(asset('css/app.css')) ?>">
@@ -25,6 +25,7 @@ $flashes = Session::takeFlashes();
     <div>
       <h2>People, shifts and pay in one place.</h2>
       <p>Drivers, depot teams and office staff sign in here to see their rotas, request leave and download payslips.</p>
+      <div class="login-points"><span><i class="bi bi-calendar3-week"></i> Rotas</span><span><i class="bi bi-sun"></i> Leave</span><span><i class="bi bi-cash-stack"></i> Payslips</span><span><i class="bi bi-megaphone"></i> News</span></div>
     </div>
     <div class="road" aria-hidden="true"></div>
   </div>

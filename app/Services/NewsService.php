@@ -290,23 +290,40 @@ final class NewsService
         $title = trim((string) ($in['title'] ?? ''));
         $subject = trim((string) ($in['subject'] ?? ''));
         $body = trim(str_replace("\r\n", "\n", (string) ($in['body'] ?? '')));
-        $audience = (string) ($in['audience'] ?? 'all');
-        $ids = array_values(array_unique(array_filter(array_map('intval', (array) ($in['audience_ids'][$audience] ?? $in['audience_ids'] ?? [])))));
         $errors = array_filter([
             'title' => $title === '' ? 'Enter a title.' : (mb_strlen($title) > 200 ? 'Use 200 characters or fewer.' : null),
             'subject' => $subject === '' ? 'Enter the email subject.' : (mb_strlen($subject) > 200 ? 'Use 200 characters or fewer.' : null),
             'body' => $body === '' ? 'Enter the message.' : (mb_strlen($body) > 20000 ? 'The message is too long.' : null),
-            'audience' => isset(self::AUDIENCES[$audience]) ? null : 'Choose who receives it.',
         ]);
-        if (!$errors && $audience !== 'all' && !$ids) {
-            $errors['audience_ids'] = 'Choose at least one ' . ['employees' => 'employee', 'departments' => 'department', 'teams' => 'team'][$audience] . '.';
-        }
+        $audience = self::audienceFromInput($in, $errors);
         if ($errors) {
             throw new ValidationException('Please check the announcement.', $errors);
         }
         $template = (int) ($in['template_id'] ?? 0);
-        return ['title' => $title, 'subject' => $subject, 'body' => $body, 'audience' => $audience, 'audience_ids' => $audience === 'all' ? null : implode(',', $ids),
-            'template_id' => $template && DB::value('SELECT id FROM news_templates WHERE id = ?', [$template]) ? $template : null];
+        return ['title' => $title, 'subject' => $subject, 'body' => $body] + $audience
+            + ['template_id' => $template && DB::value('SELECT id FROM news_templates WHERE id = ?', [$template]) ? $template : null];
+    }
+
+    /**
+     * Reads the audience picker (audience + audience_ids[<audience>][]) shared by announcements and threads.
+     * Adds to $errors on a problem. @return array{audience:string, audience_ids:?string}
+     */
+    public static function audienceFromInput(array $in, array &$errors): array
+    {
+        $audience = (string) ($in['audience'] ?? 'all');
+        $ids = array_values(array_unique(array_filter(array_map('intval', (array) ($in['audience_ids'][$audience] ?? $in['audience_ids'] ?? [])))));
+        if (!isset(self::AUDIENCES[$audience])) {
+            $errors['audience'] = 'Choose who receives it.';
+        } elseif (!$errors && $audience !== 'all' && !$ids) {
+            $errors['audience_ids'] = 'Choose at least one ' . ['employees' => 'employee', 'departments' => 'department', 'teams' => 'team'][$audience] . '.';
+        }
+        return ['audience' => $audience, 'audience_ids' => $audience === 'all' ? null : implode(',', $ids)];
+    }
+
+    /** True when the employee is in the audience (as worked out by recipients()). */
+    public static function inAudience(array $post, int $employeeId): bool
+    {
+        return in_array($employeeId, array_map(fn ($r) => (int) $r['id'], self::recipients($post)), true);
     }
 
     private static function editable(int $id): array

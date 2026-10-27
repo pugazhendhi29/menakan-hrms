@@ -31,8 +31,10 @@ $val = function (array $row, string $col, string $type) use ($refs) {
           <?php if ($toggle): ?><td><?= $r[$toggle] ? '<span class="badge text-bg-success">Yes</span>' : '<span class="badge text-bg-secondary">No</span>' ?></td><?php endif; ?>
           <td class="text-end text-nowrap">
             <a class="btn btn-sm btn-outline-secondary" href="<?= e(url('/settings/' . $table . '?edit=' . $r['id'])) ?>">Edit</a>
+            <?php if (!empty($r['is_system'])): ?><span class="badge text-bg-light border ms-1" title="Built in: always available">Built in</span><?php else: ?>
             <form class="d-inline" method="post" action="<?= e(url('/settings/' . $table . '/' . $r['id'] . '/toggle')) ?>"<?= $toggle ? '' : ' data-confirm="Delete this entry?"' ?>><?= csrf_field() ?>
               <button class="btn btn-sm btn-outline-<?= $toggle ? 'secondary' : 'danger' ?>"><?= $toggle ? ($r[$toggle] ? ($toggle === 'is_mandatory' ? 'Make optional' : 'Deactivate') : ($toggle === 'is_mandatory' ? 'Make mandatory' : 'Activate')) : 'Delete' ?></button></form>
+            <?php endif; ?>
           </td>
         </tr>
       <?php endforeach; ?>
@@ -47,7 +49,7 @@ $val = function (array $row, string $col, string $type) use ($refs) {
         <?php if ($edit): ?><input type="hidden" name="id" value="<?= e($edit['id']) ?>"><?php endif; ?>
         <?php foreach ($fields as $col => [$name, $type, $required]): $cur = old($col, $edit[$col] ?? ''); $fid = 'f_' . $col; ?>
           <?php if ($type === 'bool'): ?>
-            <div class="form-check"><input class="form-check-input" type="checkbox" id="<?= $fid ?>" name="<?= e($col) ?>" value="1"<?= checked($edit ? $edit[$col] : in_array($col, ['mon', 'tue', 'wed', 'thu', 'fri', 'is_paid', 'employee_can_request', 'visible_to_employee'], true)) ?>><label class="form-check-label" for="<?= $fid ?>"><?= e($name) ?></label></div>
+            <div class="form-check"><input class="form-check-input" type="checkbox" id="<?= $fid ?>" name="<?= e($col) ?>" value="1"<?= checked($edit ? $edit[$col] : in_array($col, ['mon', 'tue', 'wed', 'thu', 'fri', 'is_paid', 'employee_can_request', 'visible_to_employee', 'counts_as_working'], true)) ?>><label class="form-check-label" for="<?= $fid ?>"><?= e($name) ?></label></div>
           <?php elseif (str_starts_with($type, 'ref:')): ?>
             <div><label class="form-label<?= $required ? ' req' : '' ?>" for="<?= $fid ?>"><?= e($name) ?></label>
               <select class="form-select form-select-sm<?= is_invalid($col) ?>" id="<?= $fid ?>" name="<?= e($col) ?>"><option value="">—</option>

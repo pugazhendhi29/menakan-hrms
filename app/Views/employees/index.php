@@ -16,7 +16,7 @@
     <select class="form-select form-select-sm" id="status" name="status" data-autosubmit>
       <option value="current"<?= selected('current', $request->str('status', 'current')) ?>>Current (not left)</option>
       <option value="all"<?= selected('all', $request->str('status')) ?>>All</option>
-      <?php foreach (EmployeeService::STATUSES as $k => $v): ?><option value="<?= e($k) ?>"<?= selected($k, $request->str('status')) ?>><?= e($v) ?></option><?php endforeach; ?>
+      <?php foreach (EmployeeService::statuses(true) as $k => $v): ?><option value="<?= e($k) ?>"<?= selected($k, $request->str('status')) ?>><?= e($v) ?></option><?php endforeach; ?>
     </select>
   </div>
   <div>
@@ -80,7 +80,7 @@
         <td><?= e($r['job_title']) ?></td>
         <td><?= e($r['department']) ?></td>
         <td class="num"><?= e(uk_date($r['start_date'])) ?></td>
-        <td><?= $r['status'] === 'left' ? '<span class="badge text-bg-secondary">Left ' . e(uk_date($r['end_date'])) . '</span>' : status_badge($r['status']) ?></td>
+        <td><?= $r['status'] === 'left' ? '<span class="badge text-bg-secondary">Left ' . e(uk_date($r['end_date'])) . '</span>' : employee_status_badge($r['status']) ?></td>
         <td><?= e(trim(($r['m_first_name'] ?? '') . ' ' . ($r['m_last_name'] ?? '')) ?: '—') ?></td>
         <td><?= $r['status'] === 'left' ? '<span class="badge text-bg-light border">Archived</span>' : '<span class="badge text-bg-' . $cls . '">' . e($label) . '</span>' ?></td>
         <td class="text-end"><a class="btn btn-sm btn-outline-secondary" href="<?= e(url('/employees/' . $r['id'])) ?>">View</a></td>

@@ -8,13 +8,13 @@ SET NAMES utf8mb4;
 SET time_zone = '+00:00';
 SET FOREIGN_KEY_CHECKS = 0;
 
-DROP TABLE IF EXISTS audit_logs, notifications, system_settings, employee_import_rows, employee_import_batches, news_sender_checks, news_deliveries, news_posts, news_templates, id_cards, p60_documents, payslips,
+DROP TABLE IF EXISTS audit_logs, notifications, system_settings, news_thread_messages, news_threads, employee_import_rows, employee_import_batches, news_sender_checks, news_deliveries, news_posts, news_templates, id_cards, p60_documents, payslips,
   leave_ledger, leave_requests, leave_entitlements, leave_types, public_holidays,
   hours_exceptions, shift_import_rows, shift_import_batches, shifts, locations, shift_types,
   attendance_import_rows, attendance_corrections, attendance_records, attendance_import_batches,
   employee_documents, document_requirements, document_categories, employee_work_experience, employee_education,
   user_sessions, login_attempts, password_tokens, users,
-  employees, employee_code_seq, job_titles, departments, work_patterns;
+  employees, employee_statuses, employee_code_seq, job_titles, departments, work_patterns;
 
 SET FOREIGN_KEY_CHECKS = 1;
 
@@ -59,6 +59,27 @@ CREATE TABLE employee_code_seq (
   next_value INT UNSIGNED NOT NULL DEFAULT 1,
   pad_length TINYINT UNSIGNED NOT NULL DEFAULT 3 COMMENT 'Digits after the prefix: A001'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE employee_statuses (
+  id                INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  code              VARCHAR(30)  NOT NULL COMMENT 'Stored on employees.status',
+  name              VARCHAR(60)  NOT NULL,
+  colour            CHAR(7)      NOT NULL DEFAULT '#64748b',
+  counts_as_working TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '1 = counted as active headcount on the dashboard and reports',
+  is_system         TINYINT(1)   NOT NULL DEFAULT 0 COMMENT 'Built in (Active, Probation, Left): the code cannot change and it cannot be switched off',
+  sort_order        SMALLINT UNSIGNED NOT NULL DEFAULT 100,
+  is_active         TINYINT(1)   NOT NULL DEFAULT 1,
+  UNIQUE KEY uq_employee_status_code (code),
+  UNIQUE KEY uq_employee_status_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO employee_statuses (code, name, colour, counts_as_working, is_system, sort_order) VALUES
+ ('active',       'Active',       '#15803d', 1, 1, 10),
+ ('probation',    'Probation',    '#1d4ed8', 1, 1, 20),
+ ('on_leave',     'On leave',     '#b45309', 1, 0, 30),
+ ('career_break', 'Career Break', '#b45309', 0, 0, 40),
+ ('suspended',    'Suspended',    '#dc2626', 0, 0, 50),
+ ('left',         'Left',         '#64748b', 0, 1, 90);
 
 CREATE TABLE employees (
   id                      INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -107,7 +128,7 @@ CREATE TABLE employees (
   probation_end_date      DATE         NULL,
   end_date                DATE         NULL,
   leaving_reason          VARCHAR(120) NULL,
-  status                  ENUM('active','probation','on_leave','career_break','suspended','left') NOT NULL DEFAULT 'active',
+  status                  VARCHAR(30)  NOT NULL DEFAULT 'active' COMMENT 'employee_statuses.code (Settings > Employee statuses)',
   salary                  DECIMAL(10,2) NULL COMMENT 'Admin-only',
   pay_frequency           ENUM('weekly','fortnightly','four_weekly','monthly') NULL,
   payroll_reference       VARCHAR(40)  NULL COMMENT 'Admin-only',
@@ -445,7 +466,7 @@ CREATE TABLE attendance_records (
   break_minutes   SMALLINT UNSIGNED NOT NULL DEFAULT 0,
   net_minutes     INT          NULL,
   status          ENUM('present','late','incomplete') NOT NULL DEFAULT 'present',
-  source          ENUM('web','import','manual') NOT NULL,
+  source          ENUM('web','import','manual','rota') NOT NULL COMMENT 'rota = recorded from the published shift (AttendanceService::fillFromRota)',
   shift_id        INT UNSIGNED NULL,
   import_batch_id INT UNSIGNED NULL,
   is_approved     TINYINT(1)   NOT NULL DEFAULT 0,
@@ -721,6 +742,47 @@ CREATE TABLE news_sender_checks (
   checked_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE news_threads (
+  id               INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  title            VARCHAR(200) NOT NULL,
+  channel          ENUM('email','chat','meeting','phone','letter','other','portal') NOT NULL DEFAULT 'email' COMMENT 'Where the conversation took place; portal = sent in the HRMS',
+  summary          VARCHAR(1000) NULL,
+  audience         ENUM('receivers','all','employees','departments','teams') NOT NULL DEFAULT 'receivers' COMMENT 'Extra readers; the receivers of every message can always read it',
+  audience_ids     VARCHAR(2000) NULL COMMENT 'Comma-separated employee, department or manager ids',
+  status           ENUM('draft','published','withdrawn') NOT NULL DEFAULT 'draft',
+  published_at     DATETIME     NULL COMMENT 'UTC, real time of publishing',
+  published_by     INT UNSIGNED NULL,
+  withdrawn_at     DATETIME     NULL,
+  withdrawn_by     INT UNSIGNED NULL,
+  withdrawn_reason VARCHAR(500) NULL,
+  created_by       INT UNSIGNED NULL,
+  created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_by       INT UNSIGNED NULL,
+  updated_at       DATETIME     NULL,
+  KEY idx_news_threads_status (status, published_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE news_thread_messages (
+  id               INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  thread_id        INT UNSIGNED NOT NULL,
+  occurred_at      DATETIME     NOT NULL COMMENT 'UTC; the date and time of the message',
+  custom_time      TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '1 = date and time entered by an admin; 0 = stamped when it was sent in the HRMS',
+  sender_type      ENUM('department','employee') NOT NULL,
+  sender_id        INT UNSIGNED NOT NULL,
+  sender_label     VARCHAR(200) NOT NULL COMMENT 'Name at the time of entry, kept if the department or employee is renamed',
+  recipient_type   ENUM('all','department','employee','thread') NOT NULL COMMENT 'thread = everyone already in the thread (a reply)',
+  recipient_ids    VARCHAR(2000) NULL COMMENT 'Comma-separated department or employee ids; NULL for all',
+  recipient_label  VARCHAR(1000) NOT NULL,
+  subject          VARCHAR(200) NULL COMMENT 'Shown as the subject line; the thread title when empty',
+  body             TEXT         NOT NULL,
+  created_by       INT UNSIGNED NULL,
+  created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'Real time the message was recorded in the HRMS',
+  updated_by       INT UNSIGNED NULL,
+  updated_at       DATETIME     NULL,
+  KEY idx_news_thread_messages (thread_id, occurred_at),
+  CONSTRAINT fk_news_thread_message_thread FOREIGN KEY (thread_id) REFERENCES news_threads(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ---------------------------------------------------------------- System
 CREATE TABLE notifications (
   id         BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -771,9 +833,6 @@ INSERT INTO system_settings (`key`, `value`, type, label, description) VALUES
  ('late_grace_minutes',         '5',    'int',     'Late grace minutes', 'Check-in after shift start + this many minutes is Late'),
  ('incomplete_after_hours',     '16',   'int',     'Flag open sessions as Incomplete after (hours)', NULL),
  ('default_break_minutes',      '30',   'int',     'Default unpaid break (minutes) when no shift is linked', 'Applied to sessions longer than 6 hours'),
- ('leave_year_start_month',     '1',    'int',     'Leave year start month (1-12)', NULL),
- ('annual_leave_weeks',         '5.6',  'decimal', 'Annual leave entitlement (weeks)', '5.6 weeks = 28 days for a 5-day worker'),
- ('leave_includes_bank_holidays','1',   'bool',    'Entitlement includes bank holidays', 'Bank holidays on working days are deducted from the annual balance'),
  ('document_expiry_warning_days','30',  'int',     'Document expiry warning (days)', NULL),
  ('wtd_average_limit_hours',    '48',   'int',     'Working Time: average weekly limit (hours)', NULL),
  ('wtd_reference_weeks',        '17',   'int',     'Working Time: reference period (weeks)', NULL),

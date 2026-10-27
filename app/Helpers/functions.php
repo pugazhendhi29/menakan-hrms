@@ -202,11 +202,25 @@ function employee_name(array $row, string $prefix = ''): string
 }
 
 /** Employee photo (served through the authorised file route) or initials when there is none. */
+/**
+ * URL of an employee's photo. The version (?v=) changes with the photo, so browsers can keep it. With $displayPx
+ * the server sends a small square copy, sharp on high-resolution screens (twice the display size).
+ */
+function employee_photo_url(array $e, int $displayPx = 0): string
+{
+    $url = url('/files/photo/' . $e['id']) . '?v=' . substr(md5((string) $e['photo_key']), 0, 8);
+    if ($displayPx > 0) {
+        $need = $displayPx * 2;
+        $url .= '&s=' . ($need <= 64 ? 64 : ($need <= 128 ? 128 : 256));
+    }
+    return $url;
+}
+
 function employee_avatar(array $e, int $size = 32): string
 {
     $style = 'width:' . $size . 'px;height:' . $size . 'px;font-size:' . max(10, (int) ($size * 0.36)) . 'px';
     if (!empty($e['photo_key']) && !empty($e['id'])) {
-        return '<img class="av av-photo" src="' . e(url('/files/photo/' . $e['id']) . '?v=' . substr(md5((string) $e['photo_key']), 0, 8)) . '" alt="Photo of ' . e(employee_name($e)) . '" style="' . $style . '">';
+        return '<img class="av av-photo" src="' . e(employee_photo_url($e, $size)) . '" alt="Photo of ' . e(employee_name($e)) . '" style="' . $style . '" width="' . $size . '" height="' . $size . '" loading="lazy" decoding="async">';
     }
     return '<span class="av" style="' . $style . '" aria-hidden="true">' . e(strtoupper(mb_substr((string) ($e['first_name'] ?? ''), 0, 1) . mb_substr((string) ($e['last_name'] ?? ''), 0, 1))) . '</span>';
 }
@@ -232,6 +246,14 @@ function status_badge(?string $status): string
         default => ucfirst(str_replace('_', ' ', $s)),
     };
     return '<span class="badge rounded-pill text-bg-' . ($map[$s] ?? 'light') . '">' . e($label) . '</span>';
+}
+
+/** An employee status badge, with the name and colour from Settings > Employee statuses. */
+function employee_status_badge(?string $code): string
+{
+    $s = \App\Services\EmployeeService::status((string) $code);
+    $colour = $s && preg_match('/^#[0-9a-fA-F]{6}$/', $s['colour']) ? $s['colour'] : '#64748b';
+    return '<span class="badge rounded-pill" style="background:' . $colour . '1f;color:' . $colour . '">' . e($s['name'] ?? ucfirst(str_replace('_', ' ', (string) $code))) . '</span>';
 }
 
 /** Pagination metadata for LIMIT/OFFSET queries. */

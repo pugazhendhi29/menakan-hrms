@@ -101,8 +101,14 @@ final class ShiftService
             }
             return $id;
         });
-        if ($d['status'] === 'published') {
-            Notifier::toEmployee((int) $employee['id'], 'shift', 'Shift ' . ($isNew ? 'added' : 'updated') . ': ' . uk_date($d['date']), $d['start_time'] . '–' . $d['end_time'], '/my/shifts');
+        // Attendance follows the rota: record, update or remove it for this employee (and the previous one, if moved).
+        AttendanceService::fillFromRota((int) $employee['id'], $userId);
+        if ($existing && (int) $existing['employee_id'] !== (int) $employee['id']) {
+            AttendanceService::fillFromRota((int) $existing['employee_id'], $userId);
+        }
+        // New shifts are not notified (employees see them in My Shifts); changes to a shift are.
+        if ($d['status'] === 'published' && !$isNew) {
+            Notifier::toEmployee((int) $employee['id'], 'shift', 'Shift updated: ' . uk_date($d['date']), $d['start_time'] . '–' . $d['end_time'], '/my/shifts');
         }
         return ['id' => $id, 'warnings' => $warnings];
     }
@@ -127,6 +133,7 @@ final class ShiftService
         }
         DB::update('shifts', ['status' => 'cancelled', 'cancelled_at' => now_utc()], 'id = ?', [$id]);
         AuditLogger::log('shift.cancelled', 'shift', $id, 'Cancelled shift for ' . $s['employee_code'] . ' on ' . uk_datetime($s['start_at']));
+        AttendanceService::fillFromRota((int) $s['employee_id'], $userId);
         if ($s['status'] === 'published') {
             Notifier::toEmployee((int) $s['employee_id'], 'shift', 'Shift cancelled: ' . uk_datetime($s['start_at']), null, '/my/shifts');
         }
@@ -149,11 +156,9 @@ final class ShiftService
         if (!$ids) {
             return 0;
         }
-        DB::query("UPDATE shifts SET status = 'published' WHERE id IN (" . DB::placeholders($ids) . ')', $ids);
-        foreach (DB::column('SELECT DISTINCT employee_id FROM shifts WHERE id IN (' . DB::placeholders($ids) . ')', $ids) as $empId) {
-            Notifier::toEmployee((int) $empId, 'shift', 'New shifts published', 'Your rota has been updated.', '/my/shifts');
-        }
+        DB::query("UPDATE shifts SET status = 'published' WHERE id IN (" . DB::placeholders($ids) . ')', $ids);   // new shifts are not notified
         AuditLogger::log('shift.published', 'shift', null, 'Published ' . count($ids) . ' draft shifts', ['ids' => $ids]);
+        AttendanceService::fillFromRota($employeeId, $userId);
         return count($ids);
     }
 

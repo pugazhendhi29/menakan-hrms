@@ -45,7 +45,7 @@ $samePermanent = old('permanent_same_as_present', $employee ? (string) $e['perma
             </select></div>
           <div class="col-sm-6"><label class="form-label req" for="status">Employee status</label>
             <select class="form-select" id="status" name="status">
-              <?php foreach (EmployeeService::STATUSES as $k => $label): ?><option value="<?= e($k) ?>"<?= $sel('status', $k, 'active') ?>><?= e($label) ?></option><?php endforeach; ?>
+              <?php foreach (EmployeeService::statuses(false, (string) ($employee['status'] ?? '')) as $k => $label): ?><option value="<?= e($k) ?>"<?= $sel('status', $k, 'active') ?>><?= e($label) ?></option><?php endforeach; ?>
             </select></div>
           <div class="col-sm-6"><label class="form-label" for="source_of_hire">Source of hire</label>
             <select class="form-select<?= is_invalid('source_of_hire') ?>" id="source_of_hire" name="source_of_hire"><option value="">—</option>

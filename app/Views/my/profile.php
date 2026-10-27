@@ -9,7 +9,7 @@ $age = EmployeeService::age($me['date_of_birth']);
   <div class="col-lg-3">
     <div class="card h-100"><div class="card-body d-flex flex-column align-items-center gap-2 text-center">
       <?php if ($me['photo_key']): ?>
-        <img class="photo-lg" src="<?= e(url('/files/photo/' . $me['id']) . '?v=' . substr(md5($me['photo_key']), 0, 8)) ?>" alt="My photo">
+        <img class="photo-lg" src="<?= e(employee_photo_url($me, 132)) ?>" alt="My photo">
       <?php else: ?>
         <div class="photo-lg"><?= e(mb_substr($me['first_name'], 0, 1) . mb_substr($me['last_name'], 0, 1)) ?></div>
       <?php endif; ?>
@@ -58,5 +58,5 @@ $age = EmployeeService::age($me['date_of_birth']);
     </div>
   </div>
 </div>
-<?= App\Core\View::render('employees/_history_tables', ['experienceRows' => $experienceRows, 'educationRows' => $educationRows, 'editUrl' => url('/my/history')], null) ?>
-<div class="alert alert-light border small mb-0">You can add or update your own work experience and education. For anything else that is wrong, please tell HR.</div>
+<?= App\Core\View::render('employees/_history_tables', ['experienceRows' => $experienceRows, 'educationRows' => $educationRows], null) ?>
+<div class="alert alert-light border small mb-0">Your profile is read only. If anything here is wrong or missing, please tell HR.</div>

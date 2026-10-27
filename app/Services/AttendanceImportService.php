@@ -97,25 +97,33 @@ final class AttendanceImportService
                 $r = self::validateRow($row['values'], $find, $today);
                 $result = 'ready';
                 $existingId = null;
+                $info = null;
                 if (!$r['messages'] && $r['employee']) {
                     $key = $r['employee']['id'] . '|' . $r['work_date'] . '|' . $r['check_in_at'];
                     if (isset($seen[$key])) {
                         $r['messages'][] = 'Duplicate of row ' . $seen[$key] . ' in this file';
                     } else {
                         $seen[$key] = $row['row_no'];
-                        $existing = DB::one('SELECT id, is_approved FROM attendance_records WHERE employee_id = ? AND work_date = ? AND check_in_at = ?',
-                            [(int) $r['employee']['id'], $r['work_date'], $r['check_in_at']]);
+                        // A record already in the system for this employee and day is updated rather than reported as a clash.
+                        $existing = self::existingRecord((int) $r['employee']['id'], $r['work_date'], $r['check_in_at'], $r['check_out_at']);
                         if ($existing) {
                             $existingId = (int) $existing['id'];
-                            $result = $existing['is_approved'] ? 'duplicate_approved' : 'duplicate';
-                        } elseif (DB::value('SELECT id FROM attendance_records WHERE employee_id = ? AND check_in_at < ? AND COALESCE(check_out_at, DATE_ADD(check_in_at, INTERVAL 16 HOUR)) > ?',
-                            [(int) $r['employee']['id'], $r['check_out_at'], $r['check_in_at']])) {
-                            $r['messages'][] = 'Overlaps an existing attendance record';
+                            $changes = self::recordChanges($existing, $r + ['notes' => $row['values']['notes'] ?? null]);
+                            $locked = AttendanceService::isLocked($existing);
+                            $result = $existing['is_approved'] || $locked ? 'duplicate_approved' : 'duplicate';
+                            $info = $locked ? 'Recorded from the rota: kept as it is (it can only be changed on a leave day)'
+                                : ($existing['is_approved'] ? 'Approved record: kept as it is' . ($changes ? ' (the file has ' . implode(', ', $changes) . ')' : '')
+                                : ($changes ? 'Updates the existing record: ' . implode(', ', $changes) : 'Already in the system: no changes'));
+                        }
+                        if ((!$existing || $result === 'duplicate') && DB::value('SELECT id FROM attendance_records WHERE employee_id = ? AND id <> ? AND check_in_at < ? AND COALESCE(check_out_at, DATE_ADD(check_in_at, INTERVAL 16 HOUR)) > ?',
+                            [(int) $r['employee']['id'], (int) $existingId, $r['check_out_at'], $r['check_in_at']])) {
+                            $r['messages'][] = 'Overlaps another attendance record';
                         }
                     }
                 }
                 if ($r['messages']) {
                     $result = 'error';
+                    $existingId = null;
                 }
                 $counts[$result === 'ready' ? 'valid' : ($result === 'error' ? 'error' : 'duplicate')]++;
                 DB::insert('attendance_import_rows', [
@@ -125,7 +133,7 @@ final class AttendanceImportService
                     'check_out_at' => $r['check_out_at'], 'break_minutes' => $r['break_minutes'], 'net_minutes' => $r['net_minutes'],
                     'notes' => mb_substr((string) ($row['values']['notes'] ?? ''), 0, 255) ?: null,
                     'raw_json' => json_encode($row['values'], JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR),
-                    'result' => $result, 'messages' => $r['messages'] ? implode(' · ', $r['messages']) : ($r['overnight'] ? 'overnight' : null),
+                    'result' => $result, 'messages' => $r['messages'] ? implode(' · ', $r['messages']) : ($info ?? ($r['overnight'] ? 'overnight' : null)),
                     'existing_record_id' => $existingId,
                 ]);
             }
@@ -136,11 +144,15 @@ final class AttendanceImportService
         });
     }
 
-    /** Imports ready rows; duplicates are skipped or (if unapproved and mode=update) updated. Approved records are never overwritten. */
+    /**
+     * Imports ready rows. Records already in the system are updated where the file differs (mode "update", the
+     * default; "skip" leaves them alone). Every changed field is kept in the record's corrections. Approved
+     * records are never overwritten.
+     */
     public static function confirm(int $batchId, string $mode, int $userId): array
     {
         if (!in_array($mode, ['skip', 'update'], true)) {
-            $mode = 'skip';
+            $mode = 'update';
         }
         return DB::transaction(function () use ($batchId, $mode, $userId) {
             $batch = DB::one('SELECT * FROM attendance_import_batches WHERE id = ? FOR UPDATE', [$batchId]);
@@ -171,20 +183,31 @@ final class AttendanceImportService
                     continue;
                 }
                 $existing = DB::one('SELECT * FROM attendance_records WHERE id = ? FOR UPDATE', [(int) $row['existing_record_id']]);
-                if ($row['result'] === 'duplicate' && $mode === 'update' && $existing && !$existing['is_approved']) {
-                    $new = ['check_out_at' => $row['check_out_at'], 'break_minutes' => (int) $row['break_minutes'], 'net_minutes' => (int) $row['net_minutes'],
-                        'status' => $status, 'notes' => $row['notes'] ?? $existing['notes']];
-                    foreach (['check_out_at', 'break_minutes', 'notes'] as $f) {
+                $changes = $existing ? self::recordChanges($existing, $row) : [];
+                $clash = $existing && DB::value('SELECT id FROM attendance_records WHERE employee_id = ? AND id <> ? AND check_in_at < ? AND COALESCE(check_out_at, DATE_ADD(check_in_at, INTERVAL 16 HOUR)) > ?',
+                    [(int) $row['employee_id'], (int) $existing['id'], $row['check_out_at'], $row['check_in_at']]);
+                $locked = $existing && AttendanceService::isLocked($existing);
+                if ($row['result'] === 'duplicate' && $mode === 'update' && $existing && !$existing['is_approved'] && !$locked && $changes && !$clash) {
+                    $new = ($existing['source'] === 'rota' ? ['source' => 'import'] : []) + ['check_in_at' => $row['check_in_at'], 'check_out_at' => $row['check_out_at'], 'break_minutes' => (int) $row['break_minutes'],
+                        'net_minutes' => (int) $row['net_minutes'], 'status' => $status, 'shift_id' => $shift['id'] ?? $existing['shift_id'], 'notes' => $row['notes'] ?? $existing['notes']];
+                    foreach (['check_in_at', 'check_out_at', 'break_minutes', 'notes'] as $f) {
                         if ((string) $existing[$f] !== (string) $new[$f]) {
                             DB::insert('attendance_corrections', ['attendance_id' => (int) $existing['id'], 'field' => $f, 'old_value' => $existing[$f],
                                 'new_value' => $new[$f], 'reason' => 'Updated by attendance import #' . $batchId, 'changed_by' => $userId, 'changed_at' => now_utc()]);
                         }
                     }
                     DB::update('attendance_records', $new, 'id = ?', [(int) $existing['id']]);
-                    DB::update('attendance_import_rows', ['result' => 'updated'], 'id = ?', [(int) $row['id']]);
+                    DB::update('attendance_import_rows', ['result' => 'updated', 'messages' => 'Updated: ' . implode(', ', $changes)], 'id = ?', [(int) $row['id']]);
                     $updated++;
                 } else {
-                    $note = $row['result'] === 'duplicate_approved' || ($existing && $existing['is_approved']) ? 'Approved record exists: needs manual review' : 'Duplicate skipped';
+                    $note = match (true) {
+                        !$existing => 'The record was removed since validation',
+                        $locked => 'Recorded from the rota: kept as it is (it can only be changed on a leave day)',
+                        $row['result'] === 'duplicate_approved' || (bool) $existing['is_approved'] => 'Approved record kept as it is: change it on the Attendance page',
+                        !$changes => 'Already in the system: no changes',
+                        $clash => 'Overlaps another attendance record',
+                        default => 'Left as it is',
+                    };
                     DB::update('attendance_import_rows', ['result' => 'skipped', 'messages' => $note], 'id = ?', [(int) $row['id']]);
                     $skipped++;
                 }
@@ -193,6 +216,40 @@ final class AttendanceImportService
             AuditLogger::log('attendance_import.confirmed', 'attendance_import_batch', $batchId, sprintf('Imported %d attendance rows, updated %d, skipped %d', $imported, $updated, $skipped));
             return ['imported' => $imported, 'updated' => $updated, 'skipped' => $skipped];
         });
+    }
+
+    /**
+     * The employee's attendance record on this work date that an imported row stands for: the only one that day,
+     * or the one it overlaps or starts at the same time as. Null when there is none (or no single match).
+     */
+    private static function existingRecord(int $employeeId, string $workDate, string $inUtc, string $outUtc): ?array
+    {
+        $sameDay = DB::all('SELECT * FROM attendance_records WHERE employee_id = ? AND work_date = ? ORDER BY check_in_at', [$employeeId, $workDate]);
+        if (count($sameDay) === 1) {
+            return $sameDay[0];
+        }
+        $matches = array_values(array_filter($sameDay, fn ($a) => $a['check_in_at'] === $inUtc
+            || ($a['check_in_at'] < $outUtc && ($a['check_out_at'] ?? gmdate('Y-m-d H:i:s', strtotime($a['check_in_at'] . ' +16 hours'))) > $inUtc)));
+        return count($matches) === 1 ? $matches[0] : null;
+    }
+
+    /** What an imported row would change on an existing record, in words. Empty notes keep the current notes. */
+    private static function recordChanges(array $old, array $new): array
+    {
+        $out = [];
+        foreach (['check_in_at' => 'check in', 'check_out_at' => 'check out'] as $f => $label) {
+            if ((string) $old[$f] !== (string) $new[$f]) {
+                $out[] = $label . ' ' . ($old[$f] ? uk_time($old[$f]) : '—') . ' → ' . ($new[$f] ? uk_time($new[$f]) : '—');
+            }
+        }
+        if ((int) $old['break_minutes'] !== (int) $new['break_minutes']) {
+            $out[] = 'break ' . (int) $old['break_minutes'] . ' → ' . (int) $new['break_minutes'] . ' min';
+        }
+        $notes = trim((string) ($new['notes'] ?? ''));
+        if ($notes !== '' && $notes !== (string) $old['notes']) {
+            $out[] = 'notes';
+        }
+        return $out;
     }
 
     public static function cancel(int $batchId): void

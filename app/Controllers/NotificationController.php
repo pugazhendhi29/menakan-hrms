@@ -14,6 +14,15 @@ final class NotificationController extends Controller
     public function index(Request $request): Response
     {
         $rows = DB::all('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 100', [$this->userId()]);
+        // News threads show the thread's own date (its latest message), not the day it was shared.
+        foreach ($rows as &$n) {
+            if (preg_match('#^/my/news/threads/(\d+)$#', (string) $n['link'], $m)) {
+                $n['shown_at'] = DB::value('SELECT MAX(occurred_at) FROM news_thread_messages WHERE thread_id = ?', [(int) $m[1]]);
+            }
+        }
+        unset($n);
+        // Newest first, by the date shown.
+        usort($rows, fn ($a, $b) => [$b['shown_at'] ?? $b['created_at'], (int) $b['id']] <=> [$a['shown_at'] ?? $a['created_at'], (int) $a['id']]);
         return view('notifications/index', ['title' => 'Notifications', 'rows' => $rows]);
     }
 

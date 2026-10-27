@@ -147,11 +147,11 @@ final class ReportController extends Controller
                 }
                 $sql = 'SELECT e.*, d.name AS department, j.title AS job_title, COALESCE(CONCAT(m.first_name, " ", m.last_name), e.reporting_manager_name) AS manager FROM employees e
                         LEFT JOIN departments d ON d.id = e.department_id LEFT JOIN job_titles j ON j.id = e.job_title_id LEFT JOIN employees m ON m.id = e.line_manager_id
-                        WHERE e.deleted_at IS NULL' . ($f['status'] === 'current' ? " AND e.status <> 'left'" : (isset(EmployeeService::STATUSES[$f['status']]) ? ' AND e.status = ' . DB::pdo()->quote($f['status']) : '')) . $dSql . ' ORDER BY e.employee_code';
+                        WHERE e.deleted_at IS NULL' . ($f['status'] === 'current' ? " AND e.status <> 'left'" : (isset(EmployeeService::statuses(true)[$f['status']]) ? ' AND e.status = ' . DB::pdo()->quote($f['status']) : '')) . $dSql . ' ORDER BY e.employee_code';
                 $rows = [];
                 foreach (DB::all($sql, $dP) as $e) {
                     $r = [$e['employee_code'], employee_name($e), $e['job_title'], $e['department'], $e['manager'], EmployeeService::TYPES[$e['employment_type']] ?? '', $e['contract_hours'] === null ? '' : (float) $e['contract_hours'],
-                        uk_date($e['start_date']), EmployeeService::STATUSES[$e['status']] ?? $e['status'], $e['email'], $e['phone']];
+                        uk_date($e['start_date']), EmployeeService::statuses(true)[$e['status']] ?? $e['status'], $e['email'], $e['phone']];
                     if ($f['pay']) {
                         array_push($r, $e['salary'] === null ? '' : (float) $e['salary'], $e['pay_frequency'], $e['payroll_reference']);
                     }
@@ -160,12 +160,20 @@ final class ReportController extends Controller
                 return [$h, $rows];
 
             case 'headcount':
-                $rows = DB::all("SELECT d.name, SUM(e.status = 'active') AS active, SUM(e.status = 'probation') AS probation, SUM(e.status = 'on_leave') AS on_leave,
-                                        SUM(e.status = 'career_break') AS career_break, SUM(e.status = 'suspended') AS suspended, SUM(e.employment_type = 'full_time') AS ft, SUM(e.employment_type <> 'full_time') AS other, COUNT(e.id) AS total
-                                   FROM departments d LEFT JOIN employees e ON e.department_id = d.id AND e.deleted_at IS NULL AND e.status <> 'left' GROUP BY d.id ORDER BY d.name");
-                $out = array_map(fn ($r) => [$r['name'], (int) $r['active'], (int) $r['probation'], (int) $r['on_leave'], (int) $r['career_break'], (int) $r['suspended'], (int) $r['ft'], (int) $r['other'], (int) $r['total']], $rows);
-                $out[] = ['Total', ...array_map(fn ($i) => array_sum(array_column($out, $i)), range(1, 8))];
-                return [['Department', 'Active', 'Probation', 'On leave', 'Career break', 'Suspended', 'Full time', 'Other contracts', 'Total'], $out];
+                // One column per employee status (from Settings), apart from Left.
+                $statuses = array_diff_key(EmployeeService::statuses(true), [EmployeeService::LEFT => 1]);
+                $cols = [];
+                $params = [];
+                foreach (array_keys($statuses) as $i => $code) {
+                    $cols[] = "SUM(e.status = ?) AS s$i";
+                    $params[] = $code;
+                }
+                $rows = DB::all('SELECT d.name, ' . implode(', ', $cols) . ", SUM(e.employment_type = 'full_time') AS ft, SUM(e.employment_type <> 'full_time') AS other, COUNT(e.id) AS total
+                                   FROM departments d LEFT JOIN employees e ON e.department_id = d.id AND e.deleted_at IS NULL AND e.status <> 'left' GROUP BY d.id ORDER BY d.name", $params);
+                $n = count($statuses);
+                $out = array_map(fn ($r) => [$r['name'], ...array_map(fn ($i) => (int) $r["s$i"], $n ? range(0, $n - 1) : []), (int) $r['ft'], (int) $r['other'], (int) $r['total']], $rows);
+                $out[] = ['Total', ...array_map(fn ($i) => array_sum(array_column($out, $i)), range(1, $n + 3))];
+                return [['Department', ...array_values($statuses), 'Full time', 'Other contracts', 'Total'], $out];
 
             case 'starters_leavers':
                 $rows = DB::all("SELECT e.*, d.name AS department, j.title AS job_title FROM employees e LEFT JOIN departments d ON d.id = e.department_id LEFT JOIN job_titles j ON j.id = e.job_title_id

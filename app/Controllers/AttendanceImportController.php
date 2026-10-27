@@ -59,7 +59,7 @@ final class AttendanceImportController extends Controller
     public function confirm(Request $request, int $id): Response
     {
         return $this->attempt($request, '/attendance-import/' . $id, function () use ($request, $id) {
-            $r = AttendanceImportService::confirm($id, $request->str('duplicate_mode', 'skip'), $this->userId());
+            $r = AttendanceImportService::confirm($id, $request->str('duplicate_mode', 'update'), $this->userId());
             flash('success', sprintf('Import complete: %d added, %d updated, %d skipped.', $r['imported'], $r['updated'], $r['skipped']));
             return redirect('/attendance-import/' . $id);
         });

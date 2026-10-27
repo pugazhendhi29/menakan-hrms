@@ -503,7 +503,7 @@ final class OrgChartPdf
     private function name(int $id): string
     {
         $p = $this->byId[$id];
-        return trim(($p['preferred_name'] ?: $p['first_name']) . ' ' . $p['last_name']);
+        return trim($p['first_name'] . ' ' . $p['last_name']);
     }
 
     /** Square, centre-cropped 240px JPEG of the employee photo (null if there is none or it cannot be read). */

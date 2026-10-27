@@ -79,7 +79,49 @@ final class EmployeeService
         return ['current' => $current, 'previous' => $previous, 'relevant' => $relevant, 'total' => $current + $previous];
     }
 
-    public const STATUSES = ['active' => 'Active', 'probation' => 'Probation', 'on_leave' => 'On leave', 'career_break' => 'Career Break', 'suspended' => 'Suspended', 'left' => 'Left'];
+    /** Built-in employee statuses the HRMS relies on (the rest are kept in Settings > Employee statuses). */
+    public const ACTIVE = 'active';
+    public const LEFT = 'left';
+
+    /** @var array<string, array>|null employee_statuses rows by code, cached for the request */
+    private static ?array $statusRows = null;
+
+    /**
+     * Employee statuses (code => name) from Settings, in list order. Switched-off statuses are left out unless
+     * $all, or unless one is $keep (the employee's current status, so it still shows on their form).
+     */
+    public static function statuses(bool $all = false, ?string $keep = null): array
+    {
+        $out = [];
+        foreach (self::statusRows() as $code => $r) {
+            if ($all || $r['is_active'] || $code === $keep) {
+                $out[$code] = $r['name'];
+            }
+        }
+        return $out;
+    }
+
+    /** One status row (name, colour, counts_as_working ...), or null for an unknown code. */
+    public static function status(string $code): ?array
+    {
+        return self::statusRows()[$code] ?? null;
+    }
+
+    public static function forgetStatuses(): void
+    {
+        self::$statusRows = null;
+    }
+
+    private static function statusRows(): array
+    {
+        if (self::$statusRows === null) {
+            self::$statusRows = [];
+            foreach (DB::all('SELECT * FROM employee_statuses ORDER BY sort_order, name') as $r) {
+                self::$statusRows[$r['code']] = $r;
+            }
+        }
+        return self::$statusRows;
+    }
     public const TYPES = ['full_time' => 'Full time', 'part_time' => 'Part time', 'casual' => 'Casual / zero hours', 'fixed_term' => 'Fixed term', 'agency' => 'Agency'];
     public const PAY_FREQ = ['weekly' => 'Weekly', 'fortnightly' => 'Fortnightly', 'four_weekly' => 'Four-weekly', 'monthly' => 'Monthly'];
 
@@ -170,7 +212,7 @@ final class EmployeeService
             'probation_end_date' => 'nullable|date|after_or_equal:start_date',
             'end_date'       => 'nullable|date|after_or_equal:start_date',
             'leaving_reason' => 'nullable|maxlen:120',
-            'status'         => 'required|in:' . implode(',', array_keys(self::STATUSES)),
+            'status'         => 'required|in:' . implode(',', array_keys(self::statuses(false, $id ? (string) DB::value('SELECT status FROM employees WHERE id = ?', [$id]) : null))),
             'salary'         => 'nullable|numeric|min:0|max:1000000',
             'pay_frequency'  => 'nullable|in:' . implode(',', array_keys(self::PAY_FREQ)),
             'payroll_reference' => 'nullable|maxlen:40',

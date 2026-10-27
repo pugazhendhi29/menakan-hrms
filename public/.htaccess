@@ -12,3 +12,27 @@ Options -Indexes
 <FilesMatch "\.(env|ini|log|sql|md|json|lock)$">
     Require all denied
 </FilesMatch>
+
+# ---------------------------------------------------------------- Speed
+# Compress text responses (pages, CSS, JS, SVG, JSON). Needs mod_deflate (on by default on most hosts).
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/plain text/css text/xml application/javascript text/javascript application/json image/svg+xml application/xml font/ttf
+</IfModule>
+
+# Static files: asset URLs carry a version (?v=file time), so browsers may keep them for a year
+# and still fetch the new file the moment it changes.
+<IfModule mod_headers.c>
+    <FilesMatch "\.(css|js|woff2?|ttf|png|jpe?g|gif|webp|svg)$">
+        Header set Cache-Control "public, max-age=31536000, immutable"
+    </FilesMatch>
+</IfModule>
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType text/css "access plus 1 year"
+    ExpiresByType application/javascript "access plus 1 year"
+    ExpiresByType text/javascript "access plus 1 year"
+    ExpiresByType font/woff2 "access plus 1 year"
+    ExpiresByType image/png "access plus 1 year"
+    ExpiresByType image/svg+xml "access plus 1 year"
+    ExpiresByType image/x-icon "access plus 1 month"
+</IfModule>
