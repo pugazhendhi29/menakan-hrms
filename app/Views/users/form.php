@@ -15,6 +15,10 @@
           <select class="form-select<?= is_invalid('employee_id') ?>" id="employee_id" name="employee_id"><option value="">None (admin-only account)</option>
             <?php foreach ($employees as $e): ?><option value="<?= e($e['id']) ?>"<?= selected($e['id'], old('employee_id', $u['employee_id'] ?? '')) ?>><?= e($e['employee_code'] . ' ' . employee_name($e)) ?></option><?php endforeach; ?>
           </select><?= field_error('employee_id') ?></div>
+        <fieldset class="col-12"><legend class="form-label">News threads access</legend>
+          <div class="form-check"><input type="hidden" name="can_backdate_threads" value="0"><input class="form-check-input" type="checkbox" id="can_backdate_threads" name="can_backdate_threads" value="1"<?= checked(old('can_backdate_threads', $u['can_backdate_threads'] ?? 0)) ?>>
+            <label class="form-check-label" for="can_backdate_threads">Can backdate thread emails</label></div>
+          <div class="form-text">With this, the user can give a thread email any past date and time. Without it, emails can only be dated today.</div></fieldset>
         <?php if (!$u): ?>
         <div class="col-12"><label class="form-label" for="password">Temporary password <small class="text-muted-2">(optional)</small></label><input class="form-control<?= is_invalid('password') ?>" type="password" id="password" name="password" autocomplete="new-password"><?= field_error('password') ?>
           <div class="form-text">Leave blank to generate a one-time activation link instead (recommended). A temporary password must be changed at first sign-in.</div></div>

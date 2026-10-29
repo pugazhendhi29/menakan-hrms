@@ -18,6 +18,7 @@ use App\Services\DocumentService;
 use App\Services\Mailer;
 use App\Services\Notifier;
 use App\Services\Settings;
+use App\Services\VisaReminder;
 
 $days = (int) Settings::get('document_expiry_warning_days', 30);
 $docs = DocumentService::expiring($days);
@@ -48,5 +49,8 @@ if ($docs) {
     }
 }
 
-AuditLogger::log('job.expiry_reminders', 'employee_document', null, sprintf('Expiry reminder job: %d documents, %d employee notices', count($docs), $employeeNotices), null, null);
-fwrite(STDOUT, sprintf("%d documents expiring within %d days or expired; %d employee notifications sent.\n", count($docs), $days, $employeeNotices));
+// Visas: admins are reminded 90, 60 and 30 days before an employee's visa ends, and once it has ended.
+$visaReminders = VisaReminder::sendDue();
+
+AuditLogger::log('job.expiry_reminders', 'employee_document', null, sprintf('Expiry reminder job: %d documents, %d employee notices, %d visa reminders', count($docs), $employeeNotices, $visaReminders), null, null);
+fwrite(STDOUT, sprintf("%d documents expiring within %d days or expired; %d employee notifications sent; %d visa reminders sent.\n", count($docs), $days, $employeeNotices, $visaReminders));

@@ -1,12 +1,19 @@
 <?php
 $q = fn (array $o) => e(url('/shifts?' . http_build_query(array_filter(array_merge(['view' => $view, 'date' => $date] + $filters, $o)))));
-$chip = function (array $s, bool $over = false, bool $showName = false): string {
+// Month view: the employee's days worked and leave taken that month, shown when hovering a shift.
+$monthStats ??= [];
+$monthLabel = $view === 'month' ? month_name((int) substr($date, 5, 2)) . ' ' . substr($date, 0, 4) : '';
+$chip = function (array $s, bool $over = false, bool $showName = false) use ($monthStats, $monthLabel): string {
     $cls = $s['status'] === 'draft' ? 'sh dr' : ($over ? 'sh x' : ($s['is_night'] ? 'sh n' : 'sh'));
     $label = uk_time($s['start_at']) . '–' . uk_time($s['end_at']) . ($s['is_night'] ? ' ☾' : '');
     if ($showName) {
         $label = $s['first_name'] . ' ' . mb_substr($s['last_name'], 0, 1) . ' · ' . $label;
     }
     $title = employee_name($s) . ' · ' . ($s['type_name'] ?? 'Shift') . ' · ' . ($s['location_name'] ?? '') . ' · ' . hours((int) $s['net_minutes']) . 'h net · ' . ucfirst($s['status']);
+    if (isset($monthStats[$s['employee_id']])) {
+        $st = $monthStats[$s['employee_id']];
+        $title .= "\n" . $monthLabel . ': ' . $st['worked'] . ' day' . ($st['worked'] === 1 ? '' : 's') . ' worked · ' . days_label($st['leave']) . ' leave taken';
+    }
     return '<a class="' . $cls . '" href="' . e(url('/shifts/' . $s['id'] . '/edit')) . '" title="' . e($title) . '">' . e($label) . '</a>';
 };
 ?>

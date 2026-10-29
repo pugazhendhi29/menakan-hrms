@@ -29,7 +29,7 @@ final class NewsThreadController extends Controller
         $rows = DB::all("SELECT t.*, COUNT(m.id) AS message_count, MAX(m.occurred_at) AS last_at,
                                 (SELECT l.sender_label FROM news_thread_messages l WHERE l.thread_id = t.id ORDER BY l.occurred_at DESC, l.id DESC LIMIT 1) AS last_sender,
                                 (SELECT l.sender_type FROM news_thread_messages l WHERE l.thread_id = t.id ORDER BY l.occurred_at DESC, l.id DESC LIMIT 1) AS last_sender_type,
-                                (SELECT LEFT(l.body, 200) FROM news_thread_messages l WHERE l.thread_id = t.id ORDER BY l.occurred_at DESC, l.id DESC LIMIT 1) AS last_body
+                                (SELECT LEFT(l.body, 3000) FROM news_thread_messages l WHERE l.thread_id = t.id ORDER BY l.occurred_at DESC, l.id DESC LIMIT 1) AS last_body
                            FROM news_threads t LEFT JOIN news_thread_messages m ON m.thread_id = t.id $where
                           GROUP BY t.id ORDER BY COALESCE(MAX(m.occurred_at), t.created_at) DESC, t.id DESC LIMIT {$p['per_page']} OFFSET {$p['offset']}", $params);
         return view('news/threads/index', ['title' => 'News threads', 'crumb' => 'Communication · News', 'rows' => $rows, 'p' => $p, 'request' => $request, 'status' => $status]);

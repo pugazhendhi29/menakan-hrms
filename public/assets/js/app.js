@@ -119,6 +119,134 @@
     document.querySelectorAll('select[data-signature-from], [data-switch="sender"]').forEach(function (el) { el.addEventListener('change', showSignature); });
     showSignature();
   }
+  // Rich message box: <textarea data-rich-editor> becomes an editable area that keeps what is pasted from Word, Excel,
+  // Outlook or a web page (formatting, tables, charts, pictures). The textarea still carries the value; the server cleans it.
+  document.querySelectorAll('textarea[data-rich-editor]').forEach(function (ta) {
+    var wrap = document.createElement('div');
+    wrap.className = 'rich-editor' + (ta.classList.contains('is-invalid') ? ' is-invalid' : '');
+    var bar = document.createElement('div');
+    bar.className = 'rich-toolbar';
+    var ed = document.createElement('div');
+    ed.className = 'rich-area news-rich';
+    ed.contentEditable = 'true';
+    ed.id = ta.id + '_editor';
+    ed.setAttribute('role', 'textbox');
+    ed.setAttribute('aria-multiline', 'true');
+    ed.setAttribute('data-placeholder', ta.getAttribute('placeholder') || '');
+    ed.style.minHeight = (parseInt(ta.getAttribute('rows'), 10) || 6) * 1.6 + 'em';
+    var label = ta.id && document.querySelector('label[for="' + ta.id + '"]');
+    if (label) { label.setAttribute('for', ed.id); ed.setAttribute('aria-labelledby', label.id || (label.id = ta.id + '_label')); }
+
+    var esc = function (s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+    var v = ta.value.trim();
+    ed.innerHTML = /^<[a-z]/i.test(v) ? v : esc(v).replace(/\n/g, '<br>');
+    var sync = function () { ta.value = (ed.textContent.trim() || ed.querySelector('img, table')) ? ed.innerHTML : ''; };
+    ed.addEventListener('input', sync);
+    if (ta.form) { ta.form.addEventListener('submit', sync); }
+
+    var insertHtml = function (html) { ed.focus(); document.execCommand('insertHTML', false, html); sync(); };
+    // A picture as a data: URL, scaled down to at most 1600px wide; the server stores it as a file.
+    var readImage = function (file) {
+      return new Promise(function (resolve) {
+        var reader = new FileReader();
+        reader.onload = function () {
+          var img = new Image();
+          img.onload = function () {
+            if (img.naturalWidth <= 1600 && reader.result.length < 3000000) { resolve(reader.result); return; }
+            var scale = Math.min(1, 1600 / img.naturalWidth), c = document.createElement('canvas');
+            c.width = Math.round(img.naturalWidth * scale);
+            c.height = Math.round(img.naturalHeight * scale);
+            c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+            var png = c.toDataURL('image/png');
+            resolve(png.length < 3000000 ? png : c.toDataURL('image/jpeg', 0.85));
+          };
+          img.onerror = function () { resolve(null); };
+          img.src = reader.result;
+        };
+        reader.onerror = function () { resolve(null); };
+        reader.readAsDataURL(file);
+      });
+    };
+    var insertImages = function (files) {
+      return Promise.all(files.map(readImage)).then(function (urls) {
+        insertHtml(urls.filter(Boolean).map(function (u) { return '<img src="' + u + '" alt="">'; }).join('<br>'));
+      });
+    };
+    // Word and Excel put their styles in a <style> block; copy them onto each element so they survive the paste.
+    var inlineStyles = function (doc) {
+      doc.querySelectorAll('[style]').forEach(function (el) { el.setAttribute('data-own-style', el.style.cssText); });
+      doc.querySelectorAll('style').forEach(function (s) {
+        var sheet;
+        try { sheet = new CSSStyleSheet(); sheet.replaceSync(s.textContent.replace(/<!--|-->/g, '')); } catch (err) { return; }
+        Array.prototype.forEach.call(sheet.cssRules, function (rule) {
+          if (!rule.selectorText) { return; }
+          var els;
+          try { els = doc.body.querySelectorAll(rule.selectorText); } catch (err) { return; }
+          els.forEach(function (el) {
+            for (var i = 0; i < rule.style.length; i++) {
+              var p = rule.style[i];
+              if (!el.getAttribute('data-own-style') || !new RegExp('(^|;)\\s*' + p + '\\s*:').test(el.getAttribute('data-own-style'))) {
+                el.style.setProperty(p, rule.style.getPropertyValue(p));
+              }
+            }
+          });
+        });
+      });
+      doc.querySelectorAll('[data-own-style]').forEach(function (el) { el.removeAttribute('data-own-style'); });
+    };
+
+    ed.addEventListener('paste', function (e) {
+      var cd = e.clipboardData;
+      if (!cd) { return; }
+      var files = Array.prototype.filter.call(cd.files || [], function (f) { return f.type.indexOf('image/') === 0; });
+      var html = cd.getData('text/html');
+      var doc = html ? new DOMParser().parseFromString(html, 'text/html') : null;
+      // A screenshot, or a chart copied from Excel (its HTML only points at a local file): paste the picture itself.
+      if (files.length && (!doc || !doc.body.textContent.trim())) {
+        e.preventDefault();
+        insertImages(files);
+        return;
+      }
+      if (!doc) { return; }
+      e.preventDefault();
+      inlineStyles(doc);
+      // Pictures that point at the copier's own disk cannot be shown; use the clipboard's picture files in their place.
+      var local = Array.prototype.slice.call(doc.body.querySelectorAll('img')).filter(function (img) { return !/^(https?:|data:)/i.test(img.getAttribute('src') || ''); });
+      Promise.all(files.slice(0, local.length).map(readImage)).then(function (urls) {
+        local.forEach(function (img, i) { if (urls[i]) { img.setAttribute('src', urls[i]); } else { img.remove(); } });
+        doc.body.querySelectorAll('script, style, meta, link').forEach(function (el) { el.remove(); });
+        insertHtml(doc.body.innerHTML);
+      });
+    });
+
+    [['bold', 'type-bold', 'Bold'], ['italic', 'type-italic', 'Italic'], ['underline', 'type-underline', 'Underline'],
+      ['insertUnorderedList', 'list-ul', 'Bulleted list'], ['insertOrderedList', 'list-ol', 'Numbered list'], ['removeFormat', 'eraser', 'Clear formatting'], ['image', 'image', 'Insert picture']]
+      .forEach(function (t) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn btn-sm btn-light';
+        b.title = t[2];
+        b.setAttribute('aria-label', t[2]);
+        b.innerHTML = '<i class="bi bi-' + t[1] + '"></i>';
+        b.addEventListener('mousedown', function (e) { e.preventDefault(); });   // keep the text selection
+        b.addEventListener('click', function () {
+          if (t[0] !== 'image') { ed.focus(); document.execCommand(t[0]); sync(); return; }
+          var input = document.createElement('input');
+          input.type = 'file';
+          input.accept = 'image/png,image/jpeg,image/gif,image/webp';
+          input.multiple = true;
+          input.addEventListener('change', function () { insertImages(Array.prototype.slice.call(input.files)); });
+          input.click();
+        });
+        bar.appendChild(b);
+      });
+
+    wrap.appendChild(bar);
+    wrap.appendChild(ed);
+    ta.removeAttribute('required');
+    ta.hidden = true;
+    ta.parentNode.insertBefore(wrap, ta.nextSibling);
+  });
   // Confirm before a specific submit button: <button data-confirm-click="Sure?">
   document.querySelectorAll('[data-confirm-click]').forEach(function (b) {
     b.addEventListener('click', function (e) {

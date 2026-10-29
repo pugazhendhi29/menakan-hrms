@@ -29,6 +29,6 @@ $subject = $m['subject'] ?: $thread['title'];
     <time class="mail-date" datetime="<?= e($when->format(DATE_ATOM)) ?>"><?= e($when->format('j M Y, H:i')) ?></time>
   </div>
   <?php if ($m['subject'] && $m['subject'] !== $thread['title']): ?><div class="mail-body pb-0 fw-semibold"><?= e($m['subject']) ?></div><?php endif; ?>
-  <div class="mail-body"><pre class="news-body"><?= e($m['body']) ?></pre></div>
+  <div class="mail-body"><div class="news-rich"><?= App\Services\RichText::render($m['body']) ?></div></div>
   <?php if (!empty($actions)): ?><div class="mail-actions"><?= $actions ?></div><?php endif; ?>
 </article>

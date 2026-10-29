@@ -11,6 +11,7 @@ $oldRecipients = old('recipient_ids', null);
 $recipients = fn (string $type) => array_map('intval', is_array($oldRecipients) ? (array) ($oldRecipients[$type] ?? [])
     : (($message['recipient_type'] ?? '') === $type ? NewsService::ids($message['recipient_ids'] ?? '') : []));
 $whenLocal = !empty($message['occurred_at']) ? from_utc($message['occurred_at'])->format('Y-m-d\TH:i') : '';
+$backdate = NewsThreadService::canBackdate((int) App\Core\Auth::id());
 $label = fn (array $emp) => employee_name($emp) . ' (' . $emp['employee_code'] . ')' . (($emp['status'] ?? '') === 'left' ? ' · left' : '');
 ?>
 <form method="post" action="<?= e($action) ?>" class="card" novalidate>
@@ -56,14 +57,14 @@ $label = fn (array $emp) => employee_name($emp) . ' (' . $emp['employee_code'] .
     </fieldset>
 
     <div class="col-md-4"><label class="form-label req" for="occurred_at">Date and time sent (UK time)</label>
-      <input class="form-control<?= is_invalid('occurred_at') ?>" type="datetime-local" id="occurred_at" name="occurred_at" max="<?= e(uk_now()->format('Y-m-d\TH:i')) ?>" value="<?= e(old('occurred_at', $whenLocal)) ?>"><?= field_error('occurred_at') ?>
-      <div class="form-text">When the original message was sent. Today or earlier.</div></div>
+      <input class="form-control<?= is_invalid('occurred_at') ?>" type="datetime-local" id="occurred_at" name="occurred_at"<?= $backdate ? '' : ' min="' . e(uk_today()) . 'T00:00"' ?> max="<?= e(uk_now()->format('Y-m-d\TH:i')) ?>" value="<?= e(old('occurred_at', $whenLocal)) ?>"><?= field_error('occurred_at') ?>
+      <div class="form-text"><?= $backdate ? 'When the original message was sent. Today or earlier.' : 'Today only. Backdating needs access from an admin.' ?></div></div>
     <div class="col-md-8"><label class="form-label" for="msg_subject">Subject</label>
       <input class="form-control<?= is_invalid('subject') ?>" id="msg_subject" name="subject" maxlength="200" value="<?= e(old('subject', (string) ($message['subject'] ?? ''))) ?>"><?= field_error('subject') ?>
       <div class="form-text">Optional. The thread title is shown when left empty.</div></div>
     <div class="col-12"><label class="form-label req" for="msg_body">Message</label>
-      <textarea class="form-control<?= is_invalid('body') ?>" id="msg_body" name="body" rows="6" required><?= e(old('body', $message['body'] ?? '')) ?></textarea><?= field_error('body') ?>
-      <div class="form-text">Plain text, as it was written.</div></div>
+      <textarea class="form-control<?= is_invalid('body') ?>" id="msg_body" name="body" rows="6" required data-rich-editor><?= e(old('body', $message['body'] ?? '')) ?></textarea><?= field_error('body') ?>
+      <div class="form-text">Type, or paste text, tables, charts and pictures as they were written.</div></div>
   </div>
   <div class="card-footer d-flex gap-2">
     <button class="btn btn-primary"><i class="bi bi-plus-lg"></i> <?= e($submit) ?></button>

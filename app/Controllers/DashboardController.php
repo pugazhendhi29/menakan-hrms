@@ -11,6 +11,7 @@ use App\Core\Response;
 use App\Services\AttendanceService;
 use App\Services\DocumentService;
 use App\Services\HoursCalculator;
+use App\Services\VisaReminder;
 use App\Services\WeekBoundary;
 
 final class DashboardController extends Controller
@@ -42,11 +43,12 @@ final class DashboardController extends Controller
                                   WHERE lr.status = 'pending' $deptSql ORDER BY lr.start_date LIMIT 6");
         $pendingCount = (int) DB::value("SELECT COUNT(*) FROM leave_requests lr JOIN employees e ON e.id = lr.employee_id WHERE lr.status = 'pending' $deptSql");
         $warnDays = (int) setting('document_expiry_warning_days', 30);
-        $expiring = DocumentService::expiring($warnDays);
+        $expiring = DocumentService::expiring($warnDays, skipOptional: true);
         if ($dept) {
             $deptName = DB::value('SELECT name FROM departments WHERE id = ?', [$dept]);
             $expiring = array_values(array_filter($expiring, fn ($d) => $d['department'] === $deptName));
         }
+        $visas = VisaReminder::due($dept ?: null);
         $missingDocs = $this->missingDocuments($dept);
         $incomplete = (int) DB::value("SELECT COUNT(*) FROM attendance_records a JOIN employees e ON e.id = a.employee_id WHERE a.status = 'incomplete' AND a.work_date >= ? $deptSql", [date('Y-m-d', strtotime($today . ' -14 days'))]);
 
@@ -62,11 +64,11 @@ final class DashboardController extends Controller
         $chart = [
             'type' => 'bar',
             'data' => ['labels' => $labels, 'datasets' => [
-                ['label' => 'Rostered', 'data' => $rosterSeries, 'backgroundColor' => '#c9d5e4', 'borderRadius' => 3],
-                ['label' => 'Attended', 'data' => $presentSeries, 'backgroundColor' => '#1b3150', 'borderRadius' => 3],
+                ['label' => 'Rostered', 'data' => $rosterSeries, 'backgroundColor' => '#dbe4f3', 'borderRadius' => 6, 'maxBarThickness' => 28],
+                ['label' => 'Attended', 'data' => $presentSeries, 'backgroundColor' => '#1d4ed8', 'borderRadius' => 6, 'maxBarThickness' => 28],
             ]],
-            'options' => ['responsive' => true, 'maintainAspectRatio' => false, 'plugins' => ['legend' => ['position' => 'bottom']],
-                'scales' => ['y' => ['beginAtZero' => true, 'ticks' => ['precision' => 0]]]],
+            'options' => ['responsive' => true, 'maintainAspectRatio' => false, 'plugins' => ['legend' => ['position' => 'bottom', 'labels' => ['usePointStyle' => true, 'pointStyle' => 'rectRounded']]],
+                'scales' => ['x' => ['grid' => ['display' => false]], 'y' => ['beginAtZero' => true, 'ticks' => ['precision' => 0], 'grid' => ['color' => '#eef1f6'], 'border' => ['display' => false]]]],
         ];
         $byDept = DB::all("SELECT d.name, COUNT(e.id) AS n FROM departments d LEFT JOIN employees e ON e.department_id = d.id AND e.deleted_at IS NULL AND e.status <> 'left' GROUP BY d.id ORDER BY d.name");
 
@@ -74,7 +76,7 @@ final class DashboardController extends Controller
             'title' => 'Dashboard', 'charts' => true, 'departments' => $this->departments(), 'dept' => $dept, 'week' => $week,
             'headcount' => $headcount, 'rostered' => $rostered, 'present' => $present, 'absentToday' => $absentToday, 'absences' => $absences,
             'overLimit' => $overLimit, 'pendingLeave' => $pendingLeave, 'pendingCount' => $pendingCount, 'expiring' => $expiring,
-            'missingDocs' => $missingDocs, 'incomplete' => $incomplete, 'chart' => $chart, 'byDept' => $byDept, 'warnDays' => $warnDays,
+            'missingDocs' => $missingDocs, 'incomplete' => $incomplete, 'chart' => $chart, 'byDept' => $byDept, 'warnDays' => $warnDays, 'visas' => $visas,
         ]);
     }
 

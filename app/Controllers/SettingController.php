@@ -24,7 +24,7 @@ final class SettingController extends Controller
         'departments' => ['Departments', ['name' => ['Name', 'text', true], 'code' => ['Code', 'text', true]], 'is_active', 'name'],
         'employee_statuses' => ['Employee statuses', ['name' => ['Name', 'text', true], 'code' => ['Code', 'text', false], 'colour' => ['Colour', 'colour', false],
             'counts_as_working' => ['Counts as working', 'bool', false], 'sort_order' => ['Order', 'int', true]], 'is_active', 'sort_order'],
-        'job_titles' => ['Job titles', ['title' => ['Title', 'text', true], 'department_id' => ['Department', 'ref:departments:name', false], 'is_driver' => ['Driving role', 'bool', false]], 'is_active', 'title'],
+        'job_titles' => ['Job titles', ['title' => ['Title', 'text', true], 'department_id' => ['Department', 'ref:departments:name', false], 'is_driver' => ['Driving role', 'bool', false], 'documents_optional' => ['Documents optional (e.g. Director)', 'bool', false]], 'is_active', 'title'],
         'locations' => ['Locations', ['name' => ['Name', 'text', true], 'address' => ['Address', 'text', false]], 'is_active', 'name'],
         'shift_types' => ['Shift types', ['name' => ['Name', 'text', true], 'code' => ['Code', 'text', true], 'default_start' => ['Start', 'time', true],
             'default_end' => ['End', 'time', true], 'default_break_minutes' => ['Break (min)', 'int', true], 'is_night' => ['Night', 'bool', false], 'colour' => ['Colour', 'colour', false]], 'is_active', 'default_start'],

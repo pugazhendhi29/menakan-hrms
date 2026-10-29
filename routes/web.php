@@ -58,6 +58,7 @@ return function (Router $r): void {
         $r->get('/files/payslip/{id}', [FileController::class, 'payslip']);
         $r->get('/files/photo/{id}', [FileController::class, 'photo']);
         $r->get('/files/p60/{id}', [FileController::class, 'p60']);
+        $r->get('/files/news-image/{year}/{month}/{name}', [FileController::class, 'newsImage']);
 
         // ---- Employee self-service
         $r->group(['employee'], function (Router $r) {

@@ -11,6 +11,7 @@ use App\Core\ValidationException;
 use App\Core\Validator;
 use App\Services\AuditLogger;
 use App\Services\HoursCalculator;
+use App\Services\LeaveService;
 use App\Services\ShiftService;
 use App\Services\WeekBoundary;
 
@@ -105,12 +106,40 @@ final class ShiftController extends Controller
             }
             $first = sprintf('%04d-%02d-01', $y, $m);
             $data += ['weeks' => $weeks, 'byDay' => $byDay, 'weekTotals' => $weekTotals, 'month' => $m, 'leaveDays' => $leaveDays,
+                'monthStats' => $this->monthStats(array_unique(array_column($shifts, 'employee_id')), $first, date('Y-m-t', strtotime($first))),
                 'limit' => $employee ? HoursCalculator::limitMinutes($employee) : null,
                 'holidays' => array_column(DB::all('SELECT holiday_date, name FROM public_holidays WHERE holiday_date BETWEEN ? AND ?', [$weeks[0], date('Y-m-d', strtotime(end($weeks) . ' +6 days'))]), 'name', 'holiday_date'),
                 'prev' => date('Y-m-d', strtotime("$first -1 month")), 'next' => date('Y-m-d', strtotime("$first +1 month")),
                 'heading' => month_name($m) . ' ' . $y];
         }
         return view('shifts/index', $data);
+    }
+
+    /**
+     * For the month view's hover text: per employee, the days worked (dates with an attendance record) and the
+     * approved leave days taken between $from and $to (the part of each request inside the month, half days included).
+     * @param int[] $employeeIds @return array<int, array{worked:int, leave:float}>
+     */
+    private function monthStats(array $employeeIds, string $from, string $to): array
+    {
+        if (!$employeeIds) {
+            return [];
+        }
+        $in = DB::placeholders($employeeIds);
+        $stats = array_fill_keys($employeeIds, ['worked' => 0, 'leave' => 0.0]);
+        foreach (DB::all("SELECT employee_id, COUNT(DISTINCT work_date) AS n FROM attendance_records WHERE employee_id IN ($in) AND work_date BETWEEN ? AND ? GROUP BY employee_id",
+            array_merge($employeeIds, [$from, $to])) as $r) {
+            $stats[$r['employee_id']]['worked'] = (int) $r['n'];
+        }
+        $people = array_column(DB::all("SELECT * FROM employees WHERE id IN ($in)", $employeeIds), null, 'id');
+        foreach (DB::all("SELECT * FROM leave_requests WHERE status = 'approved' AND employee_id IN ($in) AND start_date <= ? AND end_date >= ?",
+            array_merge($employeeIds, [$to, $from])) as $l) {
+            $start = max($l['start_date'], $from);
+            $end = min($l['end_date'], $to);
+            $stats[$l['employee_id']]['leave'] += LeaveService::countDays($people[$l['employee_id']], $start, $end,
+                $start === $l['start_date'] && (bool) $l['start_half'], $end === $l['end_date'] && (bool) $l['end_half']);
+        }
+        return $stats;
     }
 
     private function formData(?array $shift, Request $request): array

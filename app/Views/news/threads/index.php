@@ -20,7 +20,7 @@
       <?php else: ?><span class="mail-avatar" style="background:<?= e($av['color']) ?>" aria-hidden="true"><?= e($r['last_sender'] ? $av['initials'] : '?') ?></span><?php endif; ?>
       <span class="inbox-main">
         <span class="inbox-top"><span class="inbox-who"><?= e($who) ?></span><span class="inbox-title"><?= e($r['title']) ?></span></span>
-        <span class="inbox-snippet d-block"><?= $r['last_body'] !== null ? e(preg_replace('/\s+/', ' ', $r['last_body'])) : 'No messages yet' ?></span>
+        <span class="inbox-snippet d-block"><?= $r['last_body'] !== null ? e(preg_replace('/\s+/', ' ', App\Services\RichText::toText($r['last_body']))) : 'No messages yet' ?></span>
         <span class="small text-muted-2 d-block"><?= e(NewsThreadService::CHANNELS[$r['channel']] ?? $r['channel']) ?> · <?= (int) $r['message_count'] ?> message<?= (int) $r['message_count'] === 1 ? '' : 's' ?> · <?= e(NewsThreadService::readersLabel($r)) ?></span>
       </span>
       <span class="inbox-side"><span><?= $r['last_at'] ? e(from_utc($r['last_at'])->format('j M Y, H:i')) : '' ?></span><?= status_badge($r['status']) ?></span>

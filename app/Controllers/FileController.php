@@ -137,4 +137,20 @@ final class FileController extends Controller
         $name = sprintf('P60_%s_%d-%02d.pdf', $p['employee_code'], $p['tax_year_start'], ($p['tax_year_start'] + 1) % 100);
         return Response::file(FileStore::path($p['storage_key']), $name, 'application/pdf', !$download);
     }
+
+    /** A picture pasted into a news thread message. Any signed-in user; the random file name is the access key. */
+    public function newsImage(Request $request, int|string $year, int|string $month, string $name): Response
+    {
+        if (!preg_match('/^[a-f0-9]{32}\.(png|jpg|gif|webp)$/', $name, $m)) {
+            throw new HttpException(404);
+        }
+        $key = sprintf('news_images/%04d/%02d/%s', (int) $year, (int) $month, $name);
+        if (!FileStore::exists($key)) {
+            throw new HttpException(404);
+        }
+        $r = Response::file(FileStore::path($key), $name, $m[1] === 'jpg' ? 'image/jpeg' : 'image/' . $m[1], true);
+        // Never changes: a new picture gets a new name.
+        $r->headers = ['Cache-Control' => 'private, max-age=31536000, immutable', 'Pragma' => ''] + $r->headers;
+        return $r;
+    }
 }

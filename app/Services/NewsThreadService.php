@@ -125,7 +125,7 @@ final class NewsThreadService
         if ($messageId !== null && !DB::value('SELECT id FROM news_thread_messages WHERE id = ? AND thread_id = ?', [$messageId, $threadId])) {
             throw new ValidationException('Message not found.');
         }
-        $data = self::validateMessage($in, $threadId, null, $messageId === null);
+        $data = self::validateMessage($in, $threadId, null, $messageId === null, !self::canBackdate($userId));
         if ($messageId === null) {
             $messageId = DB::insert('news_thread_messages', $data + ['thread_id' => $threadId, 'custom_time' => 1, 'created_by' => $userId]);
             $what = $t['status'] === 'published' ? 'Added a reply' : 'Added a message';
@@ -205,7 +205,7 @@ final class NewsThreadService
             $errors['recipient_type'] = 'Choose who receives the email.';
         }
         try {
-            $data = self::validateMessage(['subject' => ''] + $in, null, null, true);
+            $data = self::validateMessage(['subject' => ''] + $in, null, null, true, !self::canBackdate($userId));
         } catch (ValidationException $e) {
             throw new ValidationException('Please check the email.', $errors + $e->errors);
         }
@@ -226,6 +226,12 @@ final class NewsThreadService
             mb_strimwidth($data['recipient_label'], 0, 80, '…'), uk_datetime($data['occurred_at'])));
         self::notify(DB::one('SELECT * FROM news_threads WHERE id = ?', [$id]), $data['sender_type'] === 'employee' ? $data['sender_id'] : null, 'New in News: ');
         return $id;
+    }
+
+    /** News threads access: whether this user may date a thread email before today (Users › Can backdate thread emails). */
+    public static function canBackdate(int $userId): bool
+    {
+        return (bool) DB::value('SELECT can_backdate_threads FROM users WHERE id = ?', [$userId]);
     }
 
     /** The signature added under an email: the employee's name and job title, or the department's name. */
@@ -261,7 +267,7 @@ final class NewsThreadService
         $last = 'FROM news_thread_messages l WHERE l.thread_id = t.id ORDER BY l.occurred_at DESC, l.id DESC LIMIT 1';
         $rows = DB::all("SELECT t.*, (SELECT MAX(occurred_at) FROM news_thread_messages m WHERE m.thread_id = t.id) AS last_message_at,
                                 (SELECT COUNT(*) FROM news_thread_messages m WHERE m.thread_id = t.id) AS message_count,
-                                (SELECT l.sender_label $last) AS last_sender, (SELECT l.sender_type $last) AS last_sender_type, (SELECT LEFT(l.body, 200) $last) AS last_body
+                                (SELECT l.sender_label $last) AS last_sender, (SELECT l.sender_type $last) AS last_sender_type, (SELECT LEFT(l.body, 3000) $last) AS last_body
                            FROM news_threads t WHERE t.status = 'published' ORDER BY last_message_at DESC, t.id DESC");
         return array_values(array_filter($rows, fn ($t) => self::canRead($t, $employeeId)));
     }
@@ -337,7 +343,7 @@ final class NewsThreadService
      * thread". $asEmployeeId: sent from the portal by this employee, who is always the sender, at the current
      * time, to employees, departments or the thread; only admins (null) choose the sender and the date and time.
      */
-    private static function validateMessage(array $in, ?int $threadId, ?int $asEmployeeId, bool $sign = false): array
+    private static function validateMessage(array $in, ?int $threadId, ?int $asEmployeeId, bool $sign = false, bool $todayOnly = false): array
     {
         $errors = [];
         if ($asEmployeeId !== null) {
@@ -353,6 +359,8 @@ final class NewsThreadService
             $errors['occurred_at'] = 'Enter the date and time the message was sent.';
         } elseif (to_utc($when) > now_utc()) {
             $errors['occurred_at'] = 'The date and time cannot be in the future: threads record messages that have already been sent.';
+        } elseif ($todayOnly && $dt->format('Y-m-d') !== uk_today()) {
+            $errors['occurred_at'] = 'You can only date an email today. Ask an admin for backdating access if you need an earlier date.';
         }
 
         $senderType = (string) ($in['sender_type'] ?? '');
@@ -394,17 +402,27 @@ final class NewsThreadService
         if (mb_strlen($subject) > 200) {
             $errors['subject'] = 'Use 200 characters or fewer.';
         }
+        // From the rich editor the body is HTML (text, tables, pictures pasted from Word, Excel…); from the portal, plain text.
         $body = trim(str_replace("\r\n", "\n", (string) ($in['body'] ?? '')));
-        if ($body === '') {
+        $html = RichText::isHtml($body);
+        $text = RichText::toText($body);
+        if ($text === '' && !($html && stripos($body, '<img') !== false)) {
             $errors['body'] = 'Enter the message.';
-        } elseif (mb_strlen($body) > 20000) {
+        } elseif (mb_strlen($text) > 20000) {
             $errors['body'] = 'The message is too long.';
         }
         if ($errors) {
             throw new ValidationException('Please check the message.', $errors);
         }
+        if ($html) {
+            $body = RichText::clean($body);
+            if (strlen($body) > 900000) {
+                throw new ValidationException('Please check the message.', ['body' => 'The message has too much formatting. Paste a smaller table or split it into two messages.']);
+            }
+        }
         if ($sign) {
-            $body .= "\n\n" . self::signature($senderType, $senderId);
+            $signature = self::signature($senderType, $senderId);
+            $body .= $html ? '<p>' . nl2br(e($signature), false) . '</p>' : "\n\n" . $signature;
         }
         return ['occurred_at' => to_utc($when), 'sender_type' => $senderType, 'sender_id' => $senderId, 'sender_label' => mb_substr((string) $senderLabel, 0, 200),
             'recipient_type' => $recipientType, 'recipient_ids' => in_array($recipientType, ['all', 'thread'], true) ? null : implode(',', $ids),

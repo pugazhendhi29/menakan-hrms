@@ -12,7 +12,7 @@
       <?php else: ?><span class="mail-avatar" style="background:<?= e($av['color']) ?>" aria-hidden="true"><?= e($av['initials']) ?></span><?php endif; ?>
       <span class="inbox-main">
         <span class="inbox-top"><span class="inbox-who"><?= e($who) ?></span><span class="inbox-title"><?= e($t['title']) ?></span></span>
-        <span class="inbox-snippet d-block"><?= e(preg_replace('/\s+/', ' ', (string) $t['last_body'])) ?></span>
+        <span class="inbox-snippet d-block"><?= e(preg_replace('/\s+/', ' ', App\Services\RichText::toText($t['last_body']))) ?></span>
       </span>
       <span class="inbox-side"><span><?= $t['last_message_at'] ? e(from_utc($t['last_message_at'])->format('j M Y, H:i')) : '' ?></span>
         <?php if ((int) $t['message_count'] > 1): ?><span class="mail-chip"><?= (int) $t['message_count'] ?></span><?php endif; ?></span>

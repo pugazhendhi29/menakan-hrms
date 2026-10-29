@@ -32,9 +32,12 @@ final class DocumentService
         return $doc['verification'] === 'verified' ? 'verified' : 'pending';
     }
 
-    /** Categories required for an employee (everyone, their department, or their job title). */
+    /** Categories required for an employee (everyone, their department, or their job title). None for a "documents optional" job title. */
     public static function requiredCategories(array $employee): array
     {
+        if (!empty($employee['job_title_id']) && DB::value('SELECT documents_optional FROM job_titles WHERE id = ?', [(int) $employee['job_title_id']])) {
+            return [];
+        }
         return DB::all(
             'SELECT DISTINCT dc.* FROM document_requirements r JOIN document_categories dc ON dc.id = r.category_id
               WHERE dc.is_active = 1 AND r.is_mandatory = 1
@@ -176,12 +179,18 @@ final class DocumentService
         AuditLogger::log('document.archived', 'employee_document', $docId, 'Archived document "' . $doc['title'] . '"', ['employee_id' => (int) $doc['employee_id']]);
     }
 
-    /** Current documents expiring within $days (or already expired when $includeExpired). */
-    public static function expiring(int $days, bool $includeExpired = true, int $limit = 500): array
+    /**
+     * Current documents expiring within $days (or already expired when $includeExpired). $skipOptional leaves out
+     * employees whose job title has documents optional (e.g. Director), as on the dashboard.
+     */
+    public static function expiring(int $days, bool $includeExpired = true, int $limit = 500, bool $skipOptional = false): array
     {
         $today = uk_today();
         $until = date('Y-m-d', strtotime("$today +$days days"));
         $where = $includeExpired ? 'd.expiry_date <= ?' : 'd.expiry_date BETWEEN ? AND ?';
+        if ($skipOptional) {
+            $where .= ' AND NOT EXISTS (SELECT 1 FROM job_titles j WHERE j.id = e.job_title_id AND j.documents_optional = 1)';
+        }
         $params = $includeExpired ? [$until] : [$today, $until];
         return DB::all(
             "SELECT d.*, dc.name AS category_name, e.employee_code, e.first_name, e.last_name, e.id AS employee_id, dep.name AS department

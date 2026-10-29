@@ -2,6 +2,8 @@
 /** New email: from / to / date and time / subject / message, published on Send. The sender's signature is added automatically. */
 use App\Services\NewsThreadService;
 
+$backdate = NewsThreadService::canBackdate((int) App\Core\Auth::id());
+
 $senderType = (string) old('sender_type', 'employee');
 $oldSender = old('sender_id', []);
 $senderId = fn (string $type) => (int) (is_array($oldSender) ? ($oldSender[$type] ?? 0) : 0);
@@ -62,7 +64,8 @@ $name = fn (array $emp) => employee_name($emp) . (($emp['status'] ?? '') === 'le
   <div class="compose-row">
     <label class="compose-label" for="occurred_at">Date</label>
     <div class="compose-field" style="max-width:260px">
-      <input class="form-control<?= is_invalid('occurred_at') ?>" type="datetime-local" id="occurred_at" name="occurred_at" max="<?= e(uk_now()->format('Y-m-d\TH:i')) ?>" value="<?= e(old('occurred_at', uk_now()->format('Y-m-d\TH:i'))) ?>"><?= field_error('occurred_at') ?>
+      <input class="form-control<?= is_invalid('occurred_at') ?>" type="datetime-local" id="occurred_at" name="occurred_at"<?= $backdate ? '' : ' min="' . e(uk_today()) . 'T00:00"' ?> max="<?= e(uk_now()->format('Y-m-d\TH:i')) ?>" value="<?= e(old('occurred_at', uk_now()->format('Y-m-d\TH:i'))) ?>"><?= field_error('occurred_at') ?>
+      <?php if (!$backdate): ?><div class="small text-muted-2 mt-1">Today only. Backdating needs access from an admin.</div><?php endif; ?>
     </div>
   </div>
 
@@ -75,7 +78,7 @@ $name = fn (array $emp) => employee_name($emp) . (($emp['status'] ?? '') === 'le
 
   <div class="compose-body">
     <label class="visually-hidden" for="body">Message</label>
-    <textarea class="form-control<?= is_invalid('body') ?>" id="body" name="body" rows="12" required placeholder="Write your email…"><?= e(old('body', '')) ?></textarea><?= field_error('body') ?>
+    <textarea class="form-control<?= is_invalid('body') ?>" id="body" name="body" rows="12" required placeholder="Write your email, or paste text, tables, charts and pictures from Word, Excel, Outlook or a web page…" data-rich-editor><?= e(old('body', '')) ?></textarea><?= field_error('body') ?>
     <div class="compose-signature" aria-live="polite">
       <div class="small text-muted-2 mb-1">Signature, added automatically:</div>
       <pre class="news-body" id="signature-preview" data-empty="Choose who the email is from.">Choose who the email is from.</pre>
