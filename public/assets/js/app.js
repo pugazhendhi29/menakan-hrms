@@ -2,6 +2,123 @@
 (function () {
   'use strict';
 
+  // Lucide icons: replace each <i class="bi bi-NAME"> with the Lucide SVG mapped to NAME in vendor/lucide/icons.js.
+  // Unmapped names keep the Bootstrap Icons glyph. Call window.mkIcons(root) after inserting markup.
+  var SVG = 'http://www.w3.org/2000/svg';
+  var renderIcons = function (root) {
+    var icons = window.MK_ICONS;
+    if (!icons) { return; }
+    (root || document).querySelectorAll('i.bi').forEach(function (el) {
+      var name = null;
+      el.classList.forEach(function (c) { if (!name && c.indexOf('bi-') === 0 && icons[c.slice(3)]) { name = c.slice(3); } });
+      if (!name) { return; }
+      var svg = document.createElementNS(SVG, 'svg');
+      [['viewBox', '0 0 24 24'], ['fill', 'none'], ['stroke', 'currentColor'], ['stroke-width', '2'], ['stroke-linecap', 'round'], ['stroke-linejoin', 'round'], ['aria-hidden', 'true'], ['focusable', 'false']]
+        .forEach(function (a) { svg.setAttribute(a[0], a[1]); });
+      icons[name].forEach(function (node) {
+        var child = document.createElementNS(SVG, node[0]);
+        Object.keys(node[1]).forEach(function (k) { child.setAttribute(k, node[1][k]); });
+        svg.appendChild(child);
+      });
+      el.classList.forEach(function (c) { if (c !== 'bi' && c.indexOf('bi-') !== 0) { svg.classList.add(c); } });
+      svg.classList.add('lucide', 'bi-' + name);
+      if (el.getAttribute('style')) { svg.setAttribute('style', el.getAttribute('style')); }
+      if (el.getAttribute('title')) { var t = document.createElementNS(SVG, 'title'); t.textContent = el.getAttribute('title'); svg.appendChild(t); svg.removeAttribute('aria-hidden'); }
+      el.replaceWith(svg);
+    });
+  };
+  window.mkIcons = renderIcons;
+  renderIcons(document);
+
+  // Clocks on UK time: <b data-clock> shows HH:MM; [data-analog-clock] also turns the hands of its SVG face every second
+  var ukParts = new Intl.DateTimeFormat('en-GB', { hour: 'numeric', minute: 'numeric', second: 'numeric', hourCycle: 'h23', timeZone: 'Europe/London' });
+  var ukNow = function () {
+    var t = {};
+    ukParts.formatToParts(new Date()).forEach(function (p) { t[p.type] = parseInt(p.value, 10); });
+    return t;
+  };
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  var clockEls = document.querySelectorAll('[data-clock]');
+  var hands = [];
+  document.querySelectorAll('[data-analog-clock] [data-hand]').forEach(function (h) {
+    h.removeAttribute('transform');
+    h.style.transformOrigin = '60px 60px';
+    hands.push({ el: h, kind: h.getAttribute('data-hand'), deg: null });
+  });
+  var tickClocks = function () {
+    var t = ukNow();
+    clockEls.forEach(function (el) { el.textContent = pad(t.hour) + ':' + pad(t.minute); });
+    hands.forEach(function (h) {
+      var target = h.kind === 'h' ? (t.hour % 12) * 30 + t.minute / 2 : h.kind === 'm' ? t.minute * 6 + t.second / 10 : t.second * 6;
+      // Keep turning forwards past 12 instead of sweeping back round the dial
+      if (h.deg === null) { h.deg = target; h.el.classList.add('no-anim'); } else {
+        h.el.classList.remove('no-anim');
+        h.deg += ((target - h.deg) % 360 + 360) % 360;
+      }
+      h.el.style.transform = 'rotate(' + h.deg + 'deg)';
+    });
+  };
+  if (clockEls.length || hands.length) { tickClocks(); setInterval(tickClocks, 1000); }
+
+  // Weather card: [data-weather data-url] shows /weather for the company, or for this device after "Use my location"
+  document.querySelectorAll('[data-weather]').forEach(function (card) {
+    var q = function (sel) { return card.querySelector(sel); };
+    var KEY = 'mk-weather-geo';
+    var useGeo = false;
+    try { useGeo = localStorage.getItem(KEY) === '1'; } catch (e) { /* storage blocked */ }
+    var btn = q('[data-wx-locate]');
+    var setButton = function () {
+      if (!btn || !navigator.geolocation) { return; }
+      btn.hidden = false;
+      btn.querySelector('span').textContent = useGeo ? 'Use company location' : 'Use my location';
+      btn.title = useGeo ? 'Show the weather at ' + card.getAttribute('data-home') : 'Show the weather where you are';
+    };
+    var show = function (w) {
+      card.removeAttribute('data-state');
+      var wet = /rain|drizzle|shower|snow|storm|fog/.test(w.icon);
+      var ic = q('[data-wx-icon]');
+      ic.className = 'wx-icon' + (w.is_day ? '' : ' is-night') + (wet ? ' is-wet' : '');
+      ic.innerHTML = '<i class="bi bi-' + w.icon + '" aria-hidden="true"></i>';
+      q('[data-wx-temp]').textContent = w.temp + '°C';
+      q('[data-wx-label]').textContent = w.label + ' · feels ' + w.feels + '°';
+      q('[data-wx-place]').innerHTML = '<i class="bi bi-geo-alt" aria-hidden="true"></i> ';
+      q('[data-wx-place]').appendChild(document.createTextNode(w.place));
+      var r = q('[data-wx-range]'); r.hidden = false; r.textContent = 'H ' + w.high + '° · L ' + w.low + '°';
+      var x = q('[data-wx-extra]'); x.hidden = false;
+      x.innerHTML = '<i class="bi bi-wx-wind" aria-hidden="true"></i> ' + w.wind + ' mph <i class="bi bi-wx-humidity" aria-hidden="true"></i> ' + w.humidity + '%';
+      renderIcons(card);
+    };
+    var fail = function () {
+      card.removeAttribute('data-state');
+      q('[data-wx-label]').textContent = 'Weather unavailable right now';
+    };
+    var load = function (coords) {
+      card.setAttribute('data-state', 'loading');
+      var url = card.getAttribute('data-url') + (coords ? '?lat=' + coords.latitude.toFixed(3) + '&lon=' + coords.longitude.toFixed(3) : '');
+      fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+        .then(show, fail);
+    };
+    var refresh = function () {
+      if (useGeo && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(function (pos) { load(pos.coords); }, function () {
+          useGeo = false;
+          try { localStorage.removeItem(KEY); } catch (e) { /* ignore */ }
+          setButton(); load(null);
+        }, { maximumAge: 600000, timeout: 8000 });
+      } else { load(null); }
+    };
+    if (btn) {
+      btn.addEventListener('click', function () {
+        useGeo = !useGeo;
+        try { if (useGeo) { localStorage.setItem(KEY, '1'); } else { localStorage.removeItem(KEY); } } catch (e) { /* ignore */ }
+        setButton(); refresh();
+      });
+    }
+    setButton(); refresh();
+    setInterval(refresh, 20 * 60 * 1000);
+  });
+
   // Mobile sidebar toggle
   document.querySelectorAll('[data-toggle-sidebar]').forEach(function (btn) {
     btn.addEventListener('click', function () {
@@ -104,6 +221,7 @@
       wrap.innerHTML = tpl.innerHTML.replace(/__INDEX__/g, String(index));
       var row = wrap.firstElementChild;
       list.appendChild(row);
+      renderIcons(row);
       wireRow(row);
       renumber(list);
       var first = row.querySelector('input, select');
@@ -250,6 +368,7 @@
         b.title = t[2];
         b.setAttribute('aria-label', t[2]);
         b.innerHTML = '<i class="bi bi-' + t[1] + '"></i>';
+        renderIcons(b);
         b.addEventListener('mousedown', function (e) { e.preventDefault(); });   // keep the text selection
         b.addEventListener('click', function () {
           if (t[0] !== 'image') { ed.focus(); document.execCommand(t[0]); sync(); return; }
@@ -295,7 +414,7 @@
       var status = document.querySelector(link.getAttribute('data-pdf-status'));
       var buttons = document.querySelectorAll('[data-pdf-export]');
       var show = function (type, html) {
-        if (status) { status.innerHTML = '<div class="alert alert-' + type + ' d-flex align-items-center gap-2 mb-0" role="alert">' + html + '</div>'; }
+        if (status) { status.innerHTML = '<div class="alert alert-' + type + ' d-flex align-items-center gap-2 mb-0" role="alert">' + html + '</div>'; renderIcons(status); }
       };
       if (link.getAttribute('aria-busy') === 'true') { return; }
       buttons.forEach(function (b) { b.setAttribute('aria-busy', 'true'); b.classList.add('disabled'); });
@@ -392,9 +511,28 @@
   if (window.Chart) {
     var css = getComputedStyle(document.documentElement);
     Chart.defaults.font.family = css.getPropertyValue('--f-body') || 'sans-serif';
-    Chart.defaults.color = '#5b6b7f';
+    Chart.defaults.color = '#718096';
+    Chart.defaults.borderColor = 'rgba(20, 40, 63, .07)';
+    Chart.defaults.plugins.legend.labels.usePointStyle = true;
+    Chart.defaults.plugins.legend.labels.boxWidth = 8;
+    Chart.defaults.plugins.legend.align = 'end';
+    Object.assign(Chart.defaults.plugins.tooltip, { backgroundColor: '#14283f', padding: 10, cornerRadius: 10, boxPadding: 4, usePointStyle: true, titleFont: { weight: '600' } });
+    // Line datasets with "fillGradient": a soft vertical fade of the line colour under the line
+    var fade = function (color) {
+      return function (ctx) {
+        var area = ctx.chart.chartArea;
+        if (!area) { return 'transparent'; }
+        var g = ctx.chart.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+        g.addColorStop(0, color + '38'); g.addColorStop(1, color + '00');
+        return g;
+      };
+    };
     document.querySelectorAll('canvas[data-chart]').forEach(function (c) {
-      try { new Chart(c, JSON.parse(c.getAttribute('data-chart'))); } catch (err) { /* ignore bad chart config */ }
+      try {
+        var cfg = JSON.parse(c.getAttribute('data-chart'));
+        (cfg.data.datasets || []).forEach(function (d) { if (d.fillGradient) { d.backgroundColor = fade(d.fillGradient); d.fill = true; delete d.fillGradient; } });
+        new Chart(c, cfg);
+      } catch (err) { /* ignore bad chart config */ }
     });
   }
 })();

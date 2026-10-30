@@ -80,7 +80,7 @@ final class Response
             'X-Content-Type-Options'  => 'nosniff',
             'X-Frame-Options'         => 'DENY',
             'Referrer-Policy'         => 'same-origin',
-            'Permissions-Policy'      => 'geolocation=(), camera=(), microphone=()',
+            'Permissions-Policy'      => 'geolocation=(self), camera=(), microphone=()',
             'Content-Security-Policy' => "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
                 . "font-src 'self' https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; object-src 'none'",
         ];

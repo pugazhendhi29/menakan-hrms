@@ -17,6 +17,12 @@ return [
     ],
     // Company webmail (cPanel / Roundcube). Staff sign in on that page; the HRMS never handles email passwords.
     'webmail_url'   => $_ENV['WEBMAIL_URL'] ?? 'https://ns3-777.333servers.com:2096/',
+    // Dashboard weather card (Open-Meteo, fetched by the server): the company's location, used unless someone shares their own.
+    'weather' => [
+        'lat'   => (float) ($_ENV['WEATHER_LAT'] ?? 51.5072),
+        'lon'   => (float) ($_ENV['WEATHER_LON'] ?? -0.1276),
+        'place' => $_ENV['WEATHER_PLACE'] ?? 'London, UK',
+    ],
     'mail' => [
         'driver' => $_ENV['MAIL_DRIVER'] ?? 'log',
         'from'   => $_ENV['MAIL_FROM'] ?? 'hr@menakantransport.com',

@@ -47,7 +47,7 @@ final class MyController extends Controller
         [$nf, $nt] = WeekBoundary::utcRangeForDates($today, date('Y-m-d', strtotime("$today +13 days")));
         $upcoming = ShiftService::inRange($nf, $nt, ['employee_id' => $id, 'published_only' => true]);
         return view('my/dashboard', [
-            'title' => 'My Dashboard', 'crumb' => employee_name($me) . ' · ' . $me['employee_code'] . ' · ' . $me['job_title'], 'me' => $me,
+            'title' => 'My Dashboard', 'greeting' => true, 'charts' => false, 'crumb' => employee_name($me) . ' · ' . $me['employee_code'] . ' · ' . $me['job_title'], 'me' => $me,
             'todayShift' => $todayShift, 'open' => $open, 'weekMinutes' => $weekMinutes, 'limit' => $limit, 'exception' => $exception,
             'leave' => LeaveService::annualSummary($id), 'upcoming' => array_slice($upcoming, 0, 8),
             'payslips' => DB::all("SELECT * FROM payslips WHERE employee_id = ? AND status = 'published' AND is_current = 1 ORDER BY period_year DESC, period_month DESC LIMIT 3", [$id]),

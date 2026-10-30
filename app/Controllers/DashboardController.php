@@ -62,18 +62,20 @@ final class DashboardController extends Controller
             $rosterSeries[] = (int) DB::value("SELECT COUNT(DISTINCT s.employee_id) FROM shifts s JOIN employees e ON e.id = s.employee_id WHERE s.status = 'published' AND s.start_at >= ? AND s.start_at < ? $deptSql", [$s, $e]);
         }
         $chart = [
-            'type' => 'bar',
+            'type' => 'line',
             'data' => ['labels' => $labels, 'datasets' => [
-                ['label' => 'Rostered', 'data' => $rosterSeries, 'backgroundColor' => '#dbe4f3', 'borderRadius' => 6, 'maxBarThickness' => 28],
-                ['label' => 'Attended', 'data' => $presentSeries, 'backgroundColor' => '#1d4ed8', 'borderRadius' => 6, 'maxBarThickness' => 28],
+                ['label' => 'Rostered', 'data' => $rosterSeries, 'borderColor' => '#2563c9', 'fillGradient' => '#2563c9', 'tension' => .4, 'borderWidth' => 2.5,
+                    'pointBackgroundColor' => '#2563c9', 'pointBorderColor' => '#fff', 'pointBorderWidth' => 2, 'pointRadius' => 4, 'pointHoverRadius' => 6],
+                ['label' => 'Attended', 'data' => $presentSeries, 'borderColor' => '#d62828', 'fillGradient' => '#d62828', 'tension' => .4, 'borderWidth' => 2.5,
+                    'pointBackgroundColor' => '#d62828', 'pointBorderColor' => '#fff', 'pointBorderWidth' => 2, 'pointRadius' => 4, 'pointHoverRadius' => 6],
             ]],
-            'options' => ['responsive' => true, 'maintainAspectRatio' => false, 'plugins' => ['legend' => ['position' => 'bottom', 'labels' => ['usePointStyle' => true, 'pointStyle' => 'rectRounded']]],
-                'scales' => ['x' => ['grid' => ['display' => false]], 'y' => ['beginAtZero' => true, 'ticks' => ['precision' => 0], 'grid' => ['color' => '#eef1f6'], 'border' => ['display' => false]]]],
+            'options' => ['responsive' => true, 'maintainAspectRatio' => false, 'interaction' => ['mode' => 'index', 'intersect' => false], 'plugins' => ['legend' => ['position' => 'top']],
+                'scales' => ['x' => ['grid' => ['display' => false], 'border' => ['display' => false]], 'y' => ['beginAtZero' => true, 'ticks' => ['precision' => 0], 'border' => ['display' => false]]]],
         ];
         $byDept = DB::all("SELECT d.name, COUNT(e.id) AS n FROM departments d LEFT JOIN employees e ON e.department_id = d.id AND e.deleted_at IS NULL AND e.status <> 'left' GROUP BY d.id ORDER BY d.name");
 
         return view('dashboard/admin', [
-            'title' => 'Dashboard', 'charts' => true, 'departments' => $this->departments(), 'dept' => $dept, 'week' => $week,
+            'title' => 'Dashboard', 'greeting' => true, 'charts' => true, 'departments' => $this->departments(), 'dept' => $dept, 'week' => $week,
             'headcount' => $headcount, 'rostered' => $rostered, 'present' => $present, 'absentToday' => $absentToday, 'absences' => $absences,
             'overLimit' => $overLimit, 'pendingLeave' => $pendingLeave, 'pendingCount' => $pendingCount, 'expiring' => $expiring,
             'missingDocs' => $missingDocs, 'incomplete' => $incomplete, 'chart' => $chart, 'byDept' => $byDept, 'warnDays' => $warnDays, 'visas' => $visas,

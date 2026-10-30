@@ -26,25 +26,29 @@ $head = function (string $icon, string $title, ?int $count = null, string $href 
 };
 $empty = fn (string $icon, string $text) => '<div class="dash-empty"><i class="bi bi-' . e($icon) . '"></i><span>' . e($text) . '</span></div>';
 ?>
-<div class="dash-hello">
+<div class="hello">
   <div>
-    <h2><?= e($greeting) ?>, <?= e(App\Core\Auth::displayName()) ?></h2>
-    <p><?= e(uk_now()->format('l j F Y')) ?> · <?= $deptName ? e($deptName) : 'All departments' ?></p>
+    <h1><?= e($greeting) ?>, <?= e(explode(' ', App\Core\Auth::displayName())[0]) ?>!</h1>
+    <p>Here's today's overview<?= $deptName ? ' for ' . e($deptName) : ' across all departments' ?>. Keep everyone safe and on the road.</p>
   </div>
-  <form class="toolbar no-print" method="get" action="<?= e(url('/dashboard')) ?>">
-    <div>
-      <label class="form-label" for="department_id">Department</label>
-      <select class="form-select form-select-sm" id="department_id" name="department_id" data-autosubmit>
-        <option value="">All departments</option>
-        <?php foreach ($departments as $d): ?><option value="<?= e($d['id']) ?>"<?= selected($d['id'], $dept) ?>><?= e($d['name']) ?></option><?php endforeach; ?>
-      </select>
-    </div>
-    <div>
-      <label class="form-label" for="week">Hours week (any date in it)</label>
-      <input class="form-control form-control-sm" type="date" id="week" name="week" value="<?= e($week) ?>" data-autosubmit>
-    </div>
-  </form>
+  <div class="hello-side">
+    <?= App\Core\View::partial('time_weather', []) ?>
+  </div>
 </div>
+
+<form class="dash-filter toolbar no-print" method="get" action="<?= e(url('/dashboard')) ?>">
+  <div>
+    <label class="form-label" for="department_id">Department</label>
+    <select class="form-select form-select-sm" id="department_id" name="department_id" data-autosubmit>
+      <option value="">All departments</option>
+      <?php foreach ($departments as $d): ?><option value="<?= e($d['id']) ?>"<?= selected($d['id'], $dept) ?>><?= e($d['name']) ?></option><?php endforeach; ?>
+    </select>
+  </div>
+  <div>
+    <label class="form-label" for="week">Hours week (any date in it)</label>
+    <input class="form-control form-control-sm" type="date" id="week" name="week" value="<?= e($week) ?>" data-autosubmit>
+  </div>
+</form>
 
 <section aria-labelledby="dash-today">
   <h2 class="dash-label" id="dash-today">Today</h2>

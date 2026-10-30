@@ -20,7 +20,7 @@ $ukNow = uk_now();
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?= e(($title ?? 'HR Portal') . ' · Menakan Transport') ?></title>
-<link rel="preload" href="<?= e(asset('fonts/inter-latin-6ab57b19.woff2')) ?>" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="<?= e(asset('fonts/comfortaa-latin-var.woff2')) ?>" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="<?= e(asset('css/fonts.css')) ?>">
 <link rel="stylesheet" href="<?= e(asset('vendor/bootstrap/bootstrap.min.css')) ?>">
 <link rel="stylesheet" href="<?= e(asset('vendor/bootstrap-icons/bootstrap-icons.min.css')) ?>">
@@ -35,7 +35,7 @@ $ukNow = uk_now();
   <aside class="side" id="sidebar" aria-label="Main navigation">
     <div class="brand">
       <span class="mk"><img src="<?= e(asset('images/logo-mark.png')) ?>" alt="" width="36" height="36"></span>
-      <div><b>Menakan Transport</b><span><?= $isAdmin ? 'HR Portal' : 'My Portal' ?></span></div>
+      <div><b>Menakan</b><span>Transport Ltd</span></div>
     </div>
     <nav>
     <?php if ($isAdmin): ?>
@@ -80,17 +80,20 @@ $ukNow = uk_now();
       <?= $nav('/account/password', 'My Account', 'key') ?>
     <?php endif; ?>
     </nav>
+    <div class="side-scene" aria-hidden="true"><b>Moving People<br>Delivering Tomorrow</b><small>Menakan Transport Ltd · <?= $isAdmin ? 'HR Portal' : 'My Portal' ?></small></div>
   </aside>
   <div class="side-backdrop" data-toggle-sidebar aria-hidden="true"></div>
   <div class="main">
     <header class="top">
       <button class="btn btn-sm btn-outline-secondary d-lg-none" type="button" data-toggle-sidebar aria-controls="sidebar" aria-label="Menu"><i class="bi bi-list"></i></button>
-      <div class="crumb">
-        <span><?= e($crumb ?? ($ukNow->format('l d/m/Y') . ' · UK time ' . $ukNow->format('H:i'))) ?></span>
-        <h1><?= e($title ?? 'HR Portal') ?></h1>
-      </div>
+      <?php if ($isAdmin): ?>
+      <form class="top-search" method="get" action="<?= e(url('/employees')) ?>" role="search">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <label class="visually-hidden" for="top-q">Search employees</label>
+        <input id="top-q" type="search" name="q" placeholder="Search employees by name or ID…" autocomplete="off">
+      </form>
+      <?php endif; ?>
       <div class="sp"></div>
-      <?php if (!empty($actions)) echo $actions; ?>
       <?php if ($isAdmin): /* notifications are for admins only */ ?>
       <a class="bell" href="<?= e(url('/notifications')) ?>" aria-label="Notifications<?= $unread ? " ($unread unread)" : '' ?>">
         <i class="bi bi-bell"></i><?php if ($unread): ?><em><?= $unread > 99 ? '99+' : $unread ?></em><?php endif; ?>
@@ -98,8 +101,9 @@ $ukNow = uk_now();
       <?php endif; ?>
       <div class="dropdown">
         <button class="who btn btn-link text-decoration-none dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
-          <?= employee_avatar(['id' => $user['employee_id'], 'photo_key' => $user['photo_key'] ?? null, 'first_name' => $user['first_name'] ?? $user['username'], 'last_name' => $user['last_name'] ?? ''], 32) ?>
-          <span class="d-none d-md-inline"><?= e(Auth::displayName()) ?> · <?= $isAdmin ? 'Admin' : 'Employee' ?></span>
+          <?= employee_avatar(['id' => $user['employee_id'], 'photo_key' => $user['photo_key'] ?? null, 'first_name' => $user['first_name'] ?? $user['username'], 'last_name' => $user['last_name'] ?? ''], 44) ?>
+          <span class="who-name"><b><?= e(Auth::displayName()) ?></b><small><?= $isAdmin ? 'HR Administrator' : 'Employee' ?></small></span>
+          <i class="bi bi-chevron-down who-caret d-none d-md-inline" aria-hidden="true"></i>
         </button>
         <ul class="dropdown-menu dropdown-menu-end">
           <?php if (Auth::employeeId() && $isAdmin): ?><li><a class="dropdown-item" href="<?= e(url('/my')) ?>">My portal</a></li><?php endif; ?>
@@ -116,12 +120,19 @@ $ukNow = uk_now();
           <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
         </div>
       <?php endforeach; ?>
+      <?php if (empty($greeting)): /* dashboards show their own greeting instead */ ?>
+      <div class="page-head">
+        <div><h1><?= e($title ?? 'HR Portal') ?></h1><p><?= e($crumb ?? ($ukNow->format('l j F Y') . ' · UK time ' . $ukNow->format('H:i'))) ?></p></div>
+        <?php if (!empty($actions)): ?><div class="d-flex flex-wrap gap-2"><?= $actions ?></div><?php endif; ?>
+      </div>
+      <?php endif; ?>
       <?= $content ?>
     </main>
   </div>
 </div>
 <script src="<?= e(asset('vendor/bootstrap/bootstrap.bundle.min.js')) ?>" defer></script>
 <?php if (!empty($charts)): ?><script src="<?= e(asset('vendor/chartjs/chart.umd.min.js')) ?>" defer></script><?php endif; ?>
+<script src="<?= e(asset('vendor/lucide/icons.js')) ?>" defer></script>
 <script src="<?= e(asset('js/app.js')) ?>" defer></script>
 </body>
 </html>

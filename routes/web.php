@@ -12,6 +12,7 @@ use App\Controllers\EmployeeController;
 use App\Controllers\EmployeeImportController;
 use App\Controllers\FileController;
 use App\Controllers\HierarchyController;
+use App\Controllers\WeatherController;
 use App\Controllers\WebmailController;
 use App\Controllers\IdCardController;
 use App\Controllers\NewsController;
@@ -52,6 +53,7 @@ return function (Router $r): void {
 
         // ---- My Email: link to the company webmail (everyone signed in)
         $r->get('/my-email', [WebmailController::class, 'index']);
+        $r->get('/weather', [WeatherController::class, 'show']);
 
         // ---- Private files (each method checks ownership; unknown or not-yours = 404)
         $r->get('/files/document/{id}', [FileController::class, 'document']);
