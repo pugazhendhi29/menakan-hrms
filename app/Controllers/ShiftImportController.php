@@ -16,9 +16,11 @@ final class ShiftImportController extends Controller
 {
     public function index(Request $request): Response
     {
-        $batches = DB::all('SELECT b.*, u.username FROM shift_import_batches b LEFT JOIN users u ON u.id = b.uploaded_by ORDER BY b.id DESC LIMIT 50');
+        $batches = DB::all('SELECT b.*, u.username FROM shift_import_batches b LEFT JOIN users u ON u.id = b.uploaded_by WHERE b.status = ? ORDER BY b.id DESC', ['validated']);
         return view('imports/index', ['title' => 'Shift Import', 'crumb' => 'Time', 'batches' => $batches, 'kind' => 'shift', 'base' => '/shift-import',
-            'help' => 'Columns: Employee ID, Date (DD/MM/YYYY), Start, End (HH:MM, UK time), Break Minutes, Shift Type, Location, Status (Draft/Published), Notes.']);
+            'icon' => 'calendar-week',
+            'columns' => ['Employee ID' => '', 'Date' => 'DD/MM/YYYY', 'Start' => 'HH:MM', 'End' => 'HH:MM', 'Break Minutes' => '', 'Shift Type' => '', 'Location' => '', 'Status' => 'Draft/Published', 'Notes' => 'optional'],
+            'help' => 'Times are UK time.']);
     }
 
     public function template(Request $request): Response

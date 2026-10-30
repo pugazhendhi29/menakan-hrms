@@ -57,7 +57,7 @@ $card = function (array $p, int $reports, bool $compact = false) use ($isAdmin, 
     $html = $href
         ? '<a class="' . $cls . '"' . $style . ' href="' . e($href) . '" title="Open ' . e($name) . '’s details">' . $inner . '</a>'
         : '<div class="' . $cls . '"' . $style . '>' . $inner . '</div>';
-    if ($isAdmin) {
+    if ($isAdmin && App\Core\Auth::canEditEmployees()) {
         $html .= '<a class="org-edit small" href="' . e(url('/employees/' . $id . '/edit#reporting_manager')) . '" title="Change reporting manager"><i class="bi bi-diagram-3"></i> Change manager</a>';
     }
     return $html;

@@ -624,3 +624,33 @@ a:focus-visible { outline: none; }
   .dash-stages { grid-template-columns: repeat(2, 1fr); }
 }
 @media print { .dash-hello { background: none; color: inherit; box-shadow: none; } .dash-scroll { max-height: none; } }
+
+/* ---------------------------------------------------------------- Import and document pages */
+.page-actions { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.stat.is-on { border-color: var(--tone); box-shadow: 0 0 0 2px color-mix(in srgb, var(--tone) 30%, transparent), var(--shadow-sm); }
+
+.dropzone { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 28px 18px; margin: 0; text-align: center; cursor: pointer;
+  border: 2px dashed #c7d2e3; border-radius: var(--radius); background: var(--surface-2); transition: border-color .15s, background .15s; }
+.dropzone > i { font-size: 2.2rem; color: var(--ok); line-height: 1; margin-bottom: 4px; }
+.dropzone-title { font-weight: 600; word-break: break-all; }
+.dropzone-hint { color: var(--muted); font-size: .82rem; }
+.dropzone:hover, .dropzone.is-over { border-color: var(--brand); background: var(--brand-soft); }
+.dropzone:focus-within { outline: 3px solid var(--hivis); outline-offset: 2px; }
+.dropzone.has-file { border-style: solid; border-color: #86efac; background: #f0fdf4; }
+
+.flow { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.flow li { display: flex; gap: 12px; align-items: flex-start; padding: 6px 0; position: relative; }
+.flow li:not(:last-child)::after { content: ""; position: absolute; left: 15px; top: 38px; bottom: -4px; width: 2px; background: var(--line); }
+.flow-ico { flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: #f1f5f9; color: var(--muted); font-size: .9rem; }
+.flow li.cur .flow-ico { background: var(--ink); color: #fff; }
+.flow b { display: block; font-size: .88rem; }
+.flow small { color: var(--muted); font-size: .8rem; }
+
+.col-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.col-chip { border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 3px 9px; font-size: .8rem; font-weight: 600; }
+.col-chip small { color: var(--muted); font-weight: 400; }
+
+.search-box { position: relative; min-width: 200px; }
+.search-box > i { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: .85rem; pointer-events: none; }
+.search-box .form-control { padding-left: 30px; }
+.dash-head.toolbar { align-items: center; }

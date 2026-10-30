@@ -29,13 +29,15 @@ final class DocumentController extends Controller
             $like = '%' . addcslashes($q, '%_\\') . '%';
             array_push($params, $like, $like, $like);
         }
-        $rows = DB::all('SELECT d.*, dc.name AS category_name, e.employee_code, e.first_name, e.last_name FROM employee_documents d
+        $rows = DB::all('SELECT d.*, dc.name AS category_name, e.employee_code, e.first_name, e.last_name, e.photo_key FROM employee_documents d
                            JOIN document_categories dc ON dc.id = d.category_id JOIN employees e ON e.id = d.employee_id
                           WHERE ' . implode(' AND ', $where) . ' ORDER BY d.expiry_date IS NULL, d.expiry_date, e.last_name', $params);
         foreach ($rows as &$r) {
             $r['derived'] = DocumentService::status($r);
         }
         unset($r);
+        $counts = array_count_values(array_column($rows, 'derived')) + ['pending' => 0, 'verified' => 0, 'expiring' => 0, 'expired' => 0, 'rejected' => 0];
+        $counts['all'] = count($rows);
         $status = $request->str('status');
         if ($status === 'expiring') {
             $rows = array_values(array_filter($rows, fn ($r) => in_array($r['derived'], ['expiring', 'expired'], true)));
@@ -44,7 +46,7 @@ final class DocumentController extends Controller
         }
         $p = paginate(count($rows), $request->int('page', 1), 50);
         return view('documents/index', [
-            'title' => 'Documents', 'crumb' => 'People', 'rows' => array_slice($rows, $p['offset'], $p['per_page']), 'p' => $p, 'request' => $request,
+            'title' => 'Documents', 'crumb' => 'People', 'rows' => array_slice($rows, $p['offset'], $p['per_page']), 'p' => $p, 'request' => $request, 'counts' => $counts,
             'categories' => DB::all('SELECT id, name FROM document_categories ORDER BY is_active DESC, sort_order, name'), 'employees' => $this->employeeOptions(),
         ]);
     }

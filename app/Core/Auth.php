@@ -50,6 +50,12 @@ final class Auth
         return (self::user()['role'] ?? null) === 'admin';
     }
 
+    /** Employees access: whether this user may edit employee details (Users › Can edit employee details). */
+    public static function canEditEmployees(): bool
+    {
+        return (bool) (self::user()['can_edit_employees'] ?? false);
+    }
+
     public static function displayName(): string
     {
         $u = self::user();

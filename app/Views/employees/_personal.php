@@ -6,7 +6,7 @@ $dd = fn ($v) => ($v === null || $v === '') ? '<span class="text-muted-2">—</s
 $age = EmployeeService::age($e['date_of_birth']);
 $visaDays = $e['visa_end_date'] ? (int) floor((strtotime($e['visa_end_date']) - strtotime(uk_today())) / 86400) : null;
 $present = implode("\n", array_filter([$e['address_line1'], $e['address_line2'], $e['city'], $e['postcode']]));
-$editable = !$e['deleted_at'];
+$editable = !$e['deleted_at'] && App\Core\Auth::canEditEmployees();
 ?>
 <div class="row g-3">
   <div class="col-xl-3 col-lg-4">

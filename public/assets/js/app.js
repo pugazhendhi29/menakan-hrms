@@ -21,6 +21,28 @@
     });
   });
 
+  // File drop area: <label data-dropzone> wrapping an <input type=file>; shows the chosen file's name
+  document.querySelectorAll('[data-dropzone]').forEach(function (zone) {
+    var input = zone.querySelector('input[type=file]');
+    var name = zone.querySelector('[data-dropzone-name]');
+    var sync = function () {
+      var f = input.files && input.files[0];
+      zone.classList.toggle('has-file', !!f);
+      if (f && name) { name.textContent = f.name; }
+    };
+    input.addEventListener('change', sync);
+    ['dragenter', 'dragover'].forEach(function (t) {
+      zone.addEventListener(t, function (e) { e.preventDefault(); zone.classList.add('is-over'); });
+    });
+    ['dragleave', 'drop'].forEach(function (t) {
+      zone.addEventListener(t, function () { zone.classList.remove('is-over'); });
+    });
+    zone.addEventListener('drop', function (e) {
+      e.preventDefault();
+      if (e.dataTransfer && e.dataTransfer.files.length) { input.files = e.dataTransfer.files; sync(); }
+    });
+  });
+
   // Auto-submit filter selects: <select data-autosubmit>
   document.querySelectorAll('[data-autosubmit]').forEach(function (el) {
     el.addEventListener('change', function () { el.form.submit(); });

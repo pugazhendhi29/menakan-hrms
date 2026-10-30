@@ -25,7 +25,7 @@ $base = url('/employees/' . $e['id']);
     </div>
     <?php if (!$e['deleted_at']): ?>
     <div class="d-flex gap-2">
-      <a class="btn btn-sm btn-primary" href="<?= e($base . '/edit') ?>"><i class="bi bi-pencil"></i> Edit</a>
+      <?php if (App\Core\Auth::canEditEmployees()): ?><a class="btn btn-sm btn-primary" href="<?= e($base . '/edit') ?>"><i class="bi bi-pencil"></i> Edit</a><?php endif; ?>
       <form method="post" action="<?= e($base . '/delete') ?>" data-confirm="Archive this employee? Their account will be deactivated. The record is kept and can be restored."><?= csrf_field() ?><button class="btn btn-sm btn-outline-danger">Archive</button></form>
     </div>
     <?php endif; ?>

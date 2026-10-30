@@ -205,14 +205,24 @@ final class EmployeeController extends Controller
         return view('employees/show', $data);
     }
 
+    /** Editing employee details needs the user's "Can edit employee details" access. */
+    private function requireEditAccess(): void
+    {
+        if (!Auth::canEditEmployees()) {
+            throw new HttpException(403, 'You do not have access to edit employee details. Ask an admin for edit access.');
+        }
+    }
+
     public function edit(Request $request, int $id): Response
     {
+        $this->requireEditAccess();
         $e = $this->load($id);
         return view('employees/form', ['title' => 'Edit ' . employee_name($e), 'crumb' => 'People · Employees · ' . $e['employee_code'], 'employee' => $e] + $this->historyRows($id) + EmployeeService::lookups());
     }
 
     public function update(Request $request, int $id): Response
     {
+        $this->requireEditAccess();
         $this->load($id);
         return $this->attempt($request, "/employees/$id/edit", function () use ($request, $id) {
             $photo = $request->file('photo');
@@ -278,6 +288,7 @@ final class EmployeeController extends Controller
 
     public function uploadPhoto(Request $request, int $id): Response
     {
+        $this->requireEditAccess();
         $this->load($id);
         return $this->attempt($request, "/employees/$id?tab=personal", function () use ($request, $id) {
             EmployeeService::setPhoto($id, $request->file('photo'));
@@ -288,6 +299,7 @@ final class EmployeeController extends Controller
 
     public function deletePhoto(Request $request, int $id): Response
     {
+        $this->requireEditAccess();
         $this->load($id);
         EmployeeService::removePhoto($id);
         flash('success', 'Photo removed.');

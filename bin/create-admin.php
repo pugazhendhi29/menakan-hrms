@@ -69,7 +69,7 @@ if ($confirm !== $password) {
 
 $id = DB::insert('users', [
     'username' => $username, 'email' => $email ?: null, 'password_hash' => Auth::hashPassword($password),
-    'role' => 'admin', 'is_active' => 1, 'employee_id' => $employeeId ? (int) $employeeId : null,
+    'role' => 'admin', 'is_active' => 1, 'can_edit_employees' => 1, 'employee_id' => $employeeId ? (int) $employeeId : null,
 ]);
 AuditLogger::log('user.created', 'user', $id, "Admin account '$username' created from the command line", null, null);
 fwrite(STDOUT, "Admin '$username' created (user #$id). Sign in at " . App\Core\Config::get('app.url') . "/login\n");

@@ -16,9 +16,11 @@ final class AttendanceImportController extends Controller
 {
     public function index(Request $request): Response
     {
-        $batches = DB::all('SELECT b.*, u.username FROM attendance_import_batches b LEFT JOIN users u ON u.id = b.uploaded_by ORDER BY b.id DESC LIMIT 50');
+        $batches = DB::all('SELECT b.*, u.username FROM attendance_import_batches b LEFT JOIN users u ON u.id = b.uploaded_by WHERE b.status = ? ORDER BY b.id DESC', ['validated']);
         return view('imports/index', ['title' => 'Attendance Import', 'crumb' => 'Time', 'batches' => $batches, 'kind' => 'attendance',
-            'base' => '/attendance-import', 'help' => 'Columns: Employee ID, Employee Name (optional), Work Date (DD/MM/YYYY), Check In, Check Out (HH:MM, UK time), Break Minutes, Notes.']);
+            'base' => '/attendance-import', 'icon' => 'clock-history',
+            'columns' => ['Employee ID' => '', 'Employee Name' => 'optional', 'Work Date' => 'DD/MM/YYYY', 'Check In' => 'HH:MM', 'Check Out' => 'HH:MM', 'Break Minutes' => '', 'Notes' => 'optional'],
+            'help' => 'Times are UK time.']);
     }
 
     public function template(Request $request): Response

@@ -20,8 +20,8 @@ final class EmployeeImportController extends Controller
     public function index(Request $request): Response
     {
         $batches = DB::all('SELECT b.*, u.username, b.create_rows + b.update_rows AS valid_rows FROM employee_import_batches b
-                             LEFT JOIN users u ON u.id = b.uploaded_by ORDER BY b.id DESC LIMIT 50');
-        return view('imports/index', ['title' => 'Employee Import', 'crumb' => 'People · Employees', 'batches' => $batches, 'kind' => 'employee', 'base' => '/employees/import',
+                             LEFT JOIN users u ON u.id = b.uploaded_by WHERE b.status = ? ORDER BY b.id DESC', ['validated']);
+        return view('imports/index', ['title' => 'Employee Import', 'crumb' => 'People · Employees', 'batches' => $batches, 'kind' => 'employee', 'base' => '/employees/import', 'icon' => 'people',
             'help' => 'Use the Employees sheet of an export, or the template. Employee ID is the key: an existing Employee ID updates that employee (only filled-in cells; type CLEAR to empty a field), '
                 . 'an empty Employee ID adds a new employee with the next ID, and a new ID such as ' . EmployeeService::exampleCode(25) . ' adds a new employee with that ID.']);
     }
