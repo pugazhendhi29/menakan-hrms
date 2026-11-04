@@ -231,7 +231,7 @@ function status_badge(?string $status): string
     $map = [
         'active' => 'success', 'probation' => 'info', 'on_leave' => 'warning', 'career_break' => 'warning', 'suspended' => 'danger', 'left' => 'secondary',
         'verified' => 'success', 'pending' => 'info', 'rejected' => 'danger', 'missing' => 'secondary', 'expiring' => 'warning', 'expired' => 'danger',
-        'present' => 'success', 'late' => 'warning', 'absent' => 'danger', 'incomplete' => 'danger',
+        'present' => 'success', 'late' => 'warning', 'absent' => 'danger', 'incomplete' => 'danger', 'off' => 'secondary',
         'draft' => 'secondary', 'published' => 'success', 'cancelled' => 'secondary', 'archived' => 'secondary',
         'approved' => 'success',
         'ready' => 'success', 'duplicate' => 'warning', 'duplicate_approved' => 'warning', 'error' => 'danger', 'imported' => 'success',
@@ -273,4 +273,34 @@ function selected(mixed $a, mixed $b): string
 function checked(mixed $v): string
 {
     return $v ? ' checked' : '';
+}
+
+/* ---------- Management reports ---------- */
+
+/** A report value for display: money as £1,234.50, percentages with %, counts as whole numbers, text as is. */
+function report_value(string $display, mixed $value): string
+{
+    if ($value === null || $value === '') {
+        return '—';
+    }
+    if ($display === 'text') {
+        return (string) $value;
+    }
+    $n = (float) $value;
+    return match ($display) {
+        'money' => ($n < 0 ? '-£' : '£') . number_format(abs($n), 2),
+        'pct' => rtrim(rtrim(number_format($n, 1), '0'), '.') . '%',
+        'int' => number_format($n, fmod($n, 1.0) == 0.0 ? 0 : 1),
+        default => rtrim(rtrim(number_format($n, 2), '0'), '.'),
+    };
+}
+
+/** Coloured badge for a management report status (or "missing" when an expected report does not exist). */
+function report_status_badge(?string $status): string
+{
+    if ($status === 'missing') {
+        return '<span class="badge rounded-pill rs rs-missing">Not started</span>';
+    }
+    $label = \App\Services\ReportService::STATUSES[(string) $status] ?? ucfirst((string) $status);
+    return '<span class="badge rounded-pill rs rs-' . e((string) $status) . '">' . e($label) . '</span>';
 }

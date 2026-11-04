@@ -137,6 +137,12 @@
       if (!window.confirm(f.getAttribute('data-confirm'))) { e.preventDefault(); }
     });
   });
+  // ...or on one submit button only: <button type="submit" data-confirm="...">
+  document.querySelectorAll('button[data-confirm]').forEach(function (b) {
+    b.addEventListener('click', function (e) {
+      if (!window.confirm(b.getAttribute('data-confirm'))) { e.preventDefault(); }
+    });
+  });
 
   // File drop area: <label data-dropzone> wrapping an <input type=file>; shows the chosen file's name
   document.querySelectorAll('[data-dropzone]').forEach(function (zone) {
@@ -145,7 +151,7 @@
     var sync = function () {
       var f = input.files && input.files[0];
       zone.classList.toggle('has-file', !!f);
-      if (f && name) { name.textContent = f.name; }
+      if (f && name) { name.textContent = input.files.length > 1 ? input.files.length + ' files selected' : f.name; }
     };
     input.addEventListener('change', sync);
     ['dragenter', 'dragover'].forEach(function (t) {

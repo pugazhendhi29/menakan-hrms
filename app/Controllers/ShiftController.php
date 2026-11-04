@@ -128,7 +128,7 @@ final class ShiftController extends Controller
         $employeeIds = array_values($employeeIds); // DB::query binds a non-list array by name
         $in = DB::placeholders($employeeIds);
         $stats = array_fill_keys($employeeIds, ['worked' => 0, 'leave' => 0.0]);
-        foreach (DB::all("SELECT employee_id, COUNT(DISTINCT work_date) AS n FROM attendance_records WHERE employee_id IN ($in) AND work_date BETWEEN ? AND ? GROUP BY employee_id",
+        foreach (DB::all("SELECT employee_id, COUNT(DISTINCT work_date) AS n FROM attendance_records WHERE employee_id IN ($in) AND status <> 'off' AND work_date BETWEEN ? AND ? GROUP BY employee_id",
             array_merge($employeeIds, [$from, $to])) as $r) {
             $stats[$r['employee_id']]['worked'] = (int) $r['n'];
         }

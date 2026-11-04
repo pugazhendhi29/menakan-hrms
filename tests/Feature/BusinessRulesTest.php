@@ -224,12 +224,19 @@ final class BusinessRulesTest extends FeatureTestCase
         $this->assertSame(self::$f['dept'], (int) $row['department_id']);   // case-insensitive reuse
         $this->assertSame(self::$f['job'], (int) $row['job_title_id']);
         $this->assertSame('North Yard', DB::value('SELECT name FROM locations WHERE id = ?', [$row['location_id']]));
-        $b = $this->newEmployee(['department' => 'Night Operations', 'designation' => 'Night Planner', 'location' => 'north yard']);
+        // Departments and locations are created when new; job titles are not (only the approved titles exist).
+        $b = $this->newEmployee(['department' => 'Night Operations', 'designation' => 'route planning manager', 'location' => 'north yard']);
         $rowB = DB::one('SELECT * FROM employees WHERE id = ?', [$b]);
         $this->assertSame($before + 1, (int) DB::value('SELECT COUNT(*) FROM departments'));
         $this->assertSame('NIGHTOPER', DB::value('SELECT code FROM departments WHERE id = ?', [$rowB['department_id']]));
-        $this->assertSame((int) $rowB['department_id'], (int) DB::value('SELECT department_id FROM job_titles WHERE id = ?', [$rowB['job_title_id']]));
+        $this->assertSame('Route Planning Manager', DB::value('SELECT title FROM job_titles WHERE id = ?', [$rowB['job_title_id']]));
         $this->assertSame($row['location_id'], $rowB['location_id']);
+        try {
+            $this->newEmployee(['designation' => 'Night Planner']);
+            $this->fail('A new job title was accepted');
+        } catch (\App\Core\ValidationException $e) {
+            $this->assertArrayHasKey('designation', $e->errors);
+        }
     }
 
     public function testReportingManagerLinksByIdOrNameOtherwiseKeepsText(): void
@@ -272,6 +279,16 @@ final class BusinessRulesTest extends FeatureTestCase
         $e = DB::one('SELECT * FROM employees WHERE id = ?', [$id]);
         return $extra + ['first_name' => $e['first_name'], 'last_name' => $e['last_name'], 'employment_type' => 'full_time', 'start_date' => $e['start_date'],
             'status' => 'active', 'department' => 'Drivers', 'designation' => 'Van Driver'];
+    }
+
+    public function testChangingTheStartDateRecalculatesTheLeaveEntitlement(): void
+    {
+        $id = self::$f['empB'];
+        EmployeeService::update($id, $this->form($id, ['start_date' => '2026-11-01']), self::$f['admin']);
+        $this->assertSame(5.0, LeaveService::annualSummary($id, '2026-11-02')['entitlement']);
+        EmployeeService::update($id, $this->form($id, ['start_date' => '2025-04-14']), self::$f['admin']);
+        $s = LeaveService::annualSummary($id, '2026-11-02');
+        $this->assertSame([28.0, 28.0], [$s['entitlement'], $s['remaining']]);
     }
 
     public function testEmployeeFormSavesRepeatableHistory(): void

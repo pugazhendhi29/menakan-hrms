@@ -29,6 +29,7 @@ $labels = ['expiring' => 'Expiring or expired', 'pending' => 'Pending verificati
   <p class="text-muted-2 mb-0">Current documents on file for active employees. Click a tile to filter.</p>
   <div class="d-flex gap-2">
     <a class="btn btn-sm btn-outline-secondary" href="<?= e(url('/documents/matrix')) ?>"><i class="bi bi-grid-3x3-gap"></i> Requirement matrix</a>
+    <a class="btn btn-sm btn-outline-primary" href="<?= e(url('/documents/bulk')) ?>"><i class="bi bi-files"></i> Bulk upload</a>
     <a class="btn btn-sm btn-hivis" href="<?= e(url('/documents/upload')) ?>"><i class="bi bi-upload"></i> Upload document</a>
   </div>
 </div>

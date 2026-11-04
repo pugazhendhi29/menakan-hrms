@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Core\DB;
+use App\Core\HttpException;
 use App\Core\Request;
 use App\Core\Response;
+use App\Core\Session;
 use App\Core\ValidationException;
 use App\Services\DocumentService;
+use App\Services\FileStore;
 
 final class DocumentController extends Controller
 {
@@ -69,6 +72,107 @@ final class DocumentController extends Controller
             flash('success', 'Document uploaded. It is pending verification.');
             return redirect('/employees/' . $employeeId . '?tab=documents');
         });
+    }
+
+    // ------------------------------------------------------------------ Bulk upload: upload many files, then map each one
+
+    private const STAGING = 'doc_staging';
+
+    /** Staged files of this session: token => [key, ext, mime, size, name, input?, error?]. */
+    private function staged(): array
+    {
+        return array_filter((array) Session::get(self::STAGING, []), fn ($s) => FileStore::exists($s['key'] ?? ''));
+    }
+
+    public function bulk(Request $request): Response
+    {
+        $employees = DB::all("SELECT id, employee_code, first_name, last_name FROM employees WHERE deleted_at IS NULL AND status <> 'left' ORDER BY first_name, last_name");
+        $categories = DB::all('SELECT * FROM document_categories WHERE is_active = 1 ORDER BY sort_order, name');
+        $rows = [];
+        foreach ($this->staged() as $token => $s) {
+            [$emp, $cat] = DocumentService::guess($s['name'], $employees, $categories);
+            $rows[$token] = $s + ['input' => ($s['input'] ?? []) + ['employee_id' => $emp, 'category_id' => $cat,
+                'title' => ucwords(trim((string) preg_replace('/[_\-.]+/', ' ', pathinfo($s['name'], PATHINFO_FILENAME))))]];
+        }
+        return view('documents/bulk', ['title' => 'Bulk upload documents', 'crumb' => 'People · Documents', 'rows' => $rows,
+            'employees' => $employees, 'categories' => $categories, 'maxFiles' => (int) ini_get('max_file_uploads') ?: 20]);
+    }
+
+    public function bulkUpload(Request $request): Response
+    {
+        $files = $request->fileList('files');
+        if (!$files) {
+            flash('danger', 'Choose one or more files to upload.');
+            return redirect('/documents/bulk');
+        }
+        $r = DocumentService::stage($files);
+        $staged = (array) Session::get(self::STAGING, []);
+        foreach ($r['staged'] as $s) {
+            $staged['f' . bin2hex(random_bytes(8))] = $s;
+        }
+        Session::set(self::STAGING, $staged);
+        if ($r['staged']) {
+            flash('success', sprintf('%d file(s) uploaded. Choose the employee and category for each one, then save.', count($r['staged'])));
+        }
+        foreach ($r['errors'] as $err) {
+            flash('danger', 'Not uploaded: ' . $err);
+        }
+        return redirect('/documents/bulk');
+    }
+
+    /** Saves the mapped files as documents; rows with a problem stay on the page with the reason. */
+    public function bulkSave(Request $request): Response
+    {
+        $staged = $this->staged();
+        $saved = $skipped = 0;
+        $who = [];
+        foreach ($request->arr('rows') as $token => $in) {
+            if (!isset($staged[$token]) || !is_array($in)) {
+                continue;
+            }
+            $in = array_map(fn ($v) => is_string($v) ? trim($v) : '', $in + ['employee_id' => '', 'category_id' => '', 'title' => '', 'document_number' => '', 'issue_date' => '', 'expiry_date' => '', 'skip' => '']);
+            if ($in['skip'] === '1') {
+                $skipped++;
+                continue;
+            }
+            try {
+                DocumentService::fromStaged((int) $in['employee_id'], $in, $staged[$token], $this->userId());
+                unset($staged[$token]);
+                $saved++;
+                $who[(int) $in['employee_id']] = true;
+            } catch (ValidationException $e) {
+                $staged[$token]['input'] = $in;
+                $staged[$token]['error'] = $e->errors ? implode(' ', $e->errors) : $e->getMessage();
+            }
+        }
+        Session::set(self::STAGING, $staged);
+        if ($saved) {
+            flash('success', sprintf('%d document(s) saved for %d employee(s). They are pending verification.', $saved, count($who)));
+        }
+        if ($staged) {
+            flash('warning', sprintf('%d file(s) still to map%s.', count($staged), $skipped ? ' (skipped ones are kept until you remove them)' : ''));
+            return redirect('/documents/bulk');
+        }
+        return redirect('/documents');
+    }
+
+    /** Removes staged files: one (token) or all. */
+    public function bulkDiscard(Request $request): Response
+    {
+        $staged = $this->staged();
+        $token = $request->str('token');
+        $drop = $token !== '' ? array_intersect_key($staged, [$token => true]) : $staged;
+        DocumentService::clearStaging(0, array_column($drop, 'key'));
+        Session::set(self::STAGING, array_diff_key($staged, $drop));
+        flash('info', sprintf('%d file(s) removed.', count($drop)));
+        return redirect(count($drop) === count($staged) ? '/documents' : '/documents/bulk');
+    }
+
+    /** Preview of a staged file (only the person who uploaded it can see it). */
+    public function bulkFile(Request $request, string $token): Response
+    {
+        $s = $this->staged()[$token] ?? throw new HttpException(404);
+        return Response::file(FileStore::path($s['key']), $s['name'], $s['mime'], true);
     }
 
     private function doc(int $id): array

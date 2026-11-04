@@ -211,8 +211,8 @@ final class ReportController extends Controller
                     (int) floor((strtotime($d['expiry_date']) - strtotime(uk_today())) / 86400), ucfirst($d['verification'])], $rows))];
 
             case 'attendance_summary':
-                $rows = DB::all("SELECT e.employee_code, e.first_name, e.last_name, d.name AS department, COUNT(DISTINCT a.work_date) AS days, COALESCE(SUM(a.net_minutes),0) AS mins,
-                                        SUM(a.status = 'late') AS late, SUM(a.status = 'incomplete') AS incomplete, SUM(a.is_approved = 0) AS unapproved
+                $rows = DB::all("SELECT e.employee_code, e.first_name, e.last_name, d.name AS department, COUNT(DISTINCT CASE WHEN a.status <> 'off' THEN a.work_date END) AS days, COALESCE(SUM(a.net_minutes),0) AS mins,
+                                        SUM(a.status = 'late') AS late, SUM(a.status = 'incomplete') AS incomplete, SUM(a.is_approved = 0 AND a.status <> 'off') AS unapproved
                                    FROM attendance_records a JOIN employees e ON e.id = a.employee_id LEFT JOIN departments d ON d.id = e.department_id
                                   WHERE a.work_date BETWEEN ? AND ? AND e.deleted_at IS NULL $dSql GROUP BY e.id ORDER BY d.name, e.last_name", array_merge([$f['from'], $f['to']], $dP));
                 return [['Employee ID', 'Name', 'Department', 'Days attended', 'Net hours', 'Late', 'Incomplete', 'Unapproved'], array_map(fn ($r) => [

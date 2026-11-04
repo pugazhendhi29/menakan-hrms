@@ -111,6 +111,115 @@ final class DocumentService
      */
     public static function upload(int $employeeId, array $input, ?array $file, int $userId, ?int $replaceId = null): int
     {
+        $cat = self::checkInput($input);
+        [$ext, $mime, $size] = FileStore::validateUpload($file, self::ALLOWED_EXT, Config::get('app.upload_limits.documents'));
+        $key = FileStore::store($file['tmp_name'], 'documents', $ext);
+        return self::record($employeeId, $input, $cat, $key, $mime, $size, (string) $file['name'], $userId, $replaceId);
+    }
+
+    /**
+     * Saves a file from the bulk upload staging area (see stage()) as a document for the employee.
+     * @param array{key:string, ext:string, mime:string, size:int, name:string} $staged
+     */
+    public static function fromStaged(int $employeeId, array $input, array $staged, int $userId): int
+    {
+        if (!DB::value('SELECT id FROM employees WHERE id = ? AND deleted_at IS NULL', [$employeeId])) {
+            throw new ValidationException('Please choose an employee.', ['employee_id' => 'Please choose an employee.']);
+        }
+        $cat = self::checkInput($input);
+        if (!FileStore::exists($staged['key'])) {
+            throw new ValidationException('The uploaded file is no longer available. Please upload it again.');
+        }
+        $key = FileStore::storeExisting(FileStore::path($staged['key']), 'documents', $staged['ext']);
+        return self::record($employeeId, $input, $cat, $key, $staged['mime'], (int) $staged['size'], $staged['name'], $userId, null);
+    }
+
+    /**
+     * Bulk upload, step 1: validates each file and keeps it in the private staging area until it is mapped to an
+     * employee and category. Staged files older than two days are cleared out.
+     * @return array{staged: array<int, array>, errors: string[]}
+     */
+    public static function stage(array $files): array
+    {
+        self::clearStaging(2 * 86400);
+        $staged = $errors = [];
+        foreach ($files as $file) {
+            try {
+                [$ext, $mime, $size] = FileStore::validateUpload($file, self::ALLOWED_EXT, Config::get('app.upload_limits.documents'));
+                $staged[] = ['key' => FileStore::store($file['tmp_name'], 'staging', $ext), 'ext' => $ext, 'mime' => $mime, 'size' => $size,
+                    'name' => mb_substr(basename((string) $file['name']), 0, 255)];
+            } catch (ValidationException $e) {
+                $errors[] = basename((string) $file['name']) . ': ' . $e->getMessage();
+            }
+        }
+        return ['staged' => $staged, 'errors' => $errors];
+    }
+
+    /** Deletes staged bulk-upload files older than $seconds (0 = all of the given keys only). */
+    public static function clearStaging(int $seconds, array $keys = []): void
+    {
+        foreach ($keys as $k) {
+            if (FileStore::exists($k)) {
+                @unlink(FileStore::path($k));
+            }
+        }
+        if ($seconds <= 0) {
+            return;
+        }
+        $dir = FileStore::root() . '/staging';
+        if (!is_dir($dir)) {
+            return;
+        }
+        foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS)) as $f) {
+            if ($f->isFile() && $f->getMTime() < time() - $seconds) {
+                @unlink($f->getPathname());
+            }
+        }
+    }
+
+    /**
+     * Bulk upload, step 2 helper: guesses the employee and category from a file name, e.g.
+     * "A005_passport.pdf" or "John Smith - BRP.jpg". Returns [employee id|null, category id|null].
+     */
+    public static function guess(string $filename, array $employees, array $categories): array
+    {
+        $norm = fn (string $s) => ' ' . trim((string) preg_replace('/[^a-z0-9]+/', ' ', strtolower($s))) . ' ';
+        $name = $norm(pathinfo($filename, PATHINFO_FILENAME));
+        $emp = null;
+        foreach ($employees as $e) {
+            if (str_contains($name, $norm($e['employee_code']))) {
+                $emp = (int) $e['id'];
+                break;
+            }
+        }
+        if ($emp === null) {
+            foreach ($employees as $e) {
+                $first = trim($norm($e['first_name']));
+                $last = trim($norm($e['last_name']));
+                if ($first !== '' && $last !== '' && str_contains($name, " $first ") && str_contains($name, " $last ")) {
+                    $emp = (int) $e['id'];
+                    break;
+                }
+            }
+        }
+        $cat = null;
+        $best = 0;
+        $aliases = ['e visa' => ['evisa', 'visa'], 'brp' => ['residence permit'], 'p 45' => ['p45'], 'p 60' => ['p60'], 'resume' => ['cv'], 'dbs' => ['disclosure']];
+        foreach ($categories as $c) {
+            $words = trim($norm(str_replace(' LETTER', '', strtoupper($c['name']))));
+            foreach (array_merge([$words], $aliases[$words] ?? []) as $w) {
+                if ($w !== '' && str_contains($name, " $w ") && strlen($w) > $best) {
+                    $cat = (int) $c['id'];
+                    $best = strlen($w);
+                }
+            }
+        }
+        return [$emp, $cat];
+    }
+
+    /** Validates the document details and returns the (active) category. */
+    private static function checkInput(array $input): array
+    {
         $v = Validator::make($input, [
             'category_id'     => 'required|integer',
             'title'           => 'required|maxlen:150',
@@ -129,16 +238,19 @@ final class DocumentService
         if ($cat['has_expiry'] && empty($input['expiry_date'])) {
             throw new ValidationException('This category needs an expiry date.', ['expiry_date' => 'An expiry date is required for ' . $cat['name'] . '.']);
         }
-        [$ext, $mime, $size] = FileStore::validateUpload($file, self::ALLOWED_EXT, Config::get('app.upload_limits.documents'));
-        $key = FileStore::store($file['tmp_name'], 'documents', $ext);
+        return $cat;
+    }
 
-        return DB::transaction(function () use ($employeeId, $input, $file, $userId, $replaceId, $key, $mime, $size, $cat) {
+    /** Inserts the document record for a stored file (archiving the one it replaces, if any). */
+    private static function record(int $employeeId, array $input, array $cat, string $key, string $mime, int $size, string $originalName, int $userId, ?int $replaceId): int
+    {
+        return DB::transaction(function () use ($employeeId, $input, $originalName, $userId, $replaceId, $key, $mime, $size, $cat) {
             $id = DB::insert('employee_documents', [
                 'employee_id' => $employeeId, 'category_id' => (int) $cat['id'], 'title' => $input['title'],
-                'document_number' => $input['document_number'] ?: null, 'issue_date' => $input['issue_date'] ?: null,
-                'expiry_date' => $input['expiry_date'] ?: null, 'original_filename' => mb_substr(basename((string) $file['name']), 0, 255),
+                'document_number' => ($input['document_number'] ?? '') ?: null, 'issue_date' => ($input['issue_date'] ?? '') ?: null,
+                'expiry_date' => ($input['expiry_date'] ?? '') ?: null, 'original_filename' => mb_substr(basename($originalName), 0, 255),
                 'storage_key' => $key, 'mime_type' => $mime, 'size_bytes' => $size, 'sha256' => FileStore::hash($key),
-                'verification' => 'pending', 'is_current' => 1, 'notes' => $input['notes'] ?: null, 'uploaded_by' => $userId,
+                'verification' => 'pending', 'is_current' => 1, 'notes' => ($input['notes'] ?? '') ?: null, 'uploaded_by' => $userId,
             ]);
             if ($replaceId) {
                 $old = DB::one('SELECT * FROM employee_documents WHERE id = ? AND employee_id = ? AND is_current = 1', [$replaceId, $employeeId]);

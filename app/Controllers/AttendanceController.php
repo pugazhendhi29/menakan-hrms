@@ -29,7 +29,7 @@ final class AttendanceController extends Controller
             $where[] = 'e.department_id = ?';
             $params[] = $dept;
         }
-        if (in_array($s = $request->str('status'), ['present', 'late', 'incomplete'], true)) {
+        if (in_array($s = $request->str('status'), ['present', 'late', 'incomplete', 'off'], true)) {
             $where[] = 'a.status = ?';
             $params[] = $s;
             if ($s === 'incomplete' && !$request->str('from')) {
@@ -57,7 +57,7 @@ final class AttendanceController extends Controller
         $p = paginate((int) DB::value("SELECT COUNT(*) $base", $params), $request->int('page', 1), 50);
         $rows = DB::all("SELECT a.*, e.employee_code, e.first_name, e.last_name, d.name AS department, s.start_at AS shift_start, s.end_at AS shift_end
                          $base ORDER BY a.check_in_at DESC LIMIT {$p['per_page']} OFFSET {$p['offset']}", $params);
-        $totals = DB::one("SELECT COUNT(*) AS n, COALESCE(SUM(a.net_minutes),0) AS mins, SUM(a.status = 'late') AS late, SUM(a.status = 'incomplete') AS incomplete $base", $params);
+        $totals = DB::one("SELECT COALESCE(SUM(a.status <> 'off'), 0) AS n, COALESCE(SUM(a.net_minutes),0) AS mins, SUM(a.status = 'late') AS late, SUM(a.status = 'incomplete') AS incomplete $base", $params);
         foreach ($rows as &$row) {
             $row['locked'] = AttendanceService::isLocked($row);
         }
@@ -71,8 +71,8 @@ final class AttendanceController extends Controller
         [$from, $to, $where, $params] = $this->filters($request);
         $rows = DB::all("SELECT a.*, e.employee_code, e.first_name, e.last_name, d.name AS department FROM attendance_records a
                           JOIN employees e ON e.id = a.employee_id LEFT JOIN departments d ON d.id = e.department_id WHERE $where ORDER BY a.work_date, e.employee_code", $params);
-        $out = array_map(fn ($a) => [$a['employee_code'], employee_name($a), $a['department'], uk_date($a['work_date']), uk_time($a['check_in_at']),
-            uk_time($a['check_out_at']), (int) $a['break_minutes'], $a['net_minutes'] === null ? '' : round($a['net_minutes'] / 60, 2), ucfirst($a['status']),
+        $out = array_map(fn ($a) => [$a['employee_code'], employee_name($a), $a['department'], uk_date($a['work_date']), $a['status'] === 'off' ? '' : uk_time($a['check_in_at']),
+            $a['status'] === 'off' ? '' : uk_time($a['check_out_at']), (int) $a['break_minutes'], $a['net_minutes'] === null ? '' : round($a['net_minutes'] / 60, 2), ucfirst($a['status']),
             $a['source'] === 'rota' ? 'From rota' : ucfirst($a['source']), $a['is_approved'] ? 'Yes' : 'No', (string) $a['notes']], $rows);
         AuditLogger::log('attendance.exported', 'attendance', null, 'Exported ' . count($out) . " attendance records ($from to $to)");
         return $this->exportTable($request->str('format') === 'csv' ? 'csv' : 'xlsx', 'attendance', ['Employee ID', 'Name', 'Department', 'Work date', 'Check in', 'Check out', 'Break (min)', 'Net hours', 'Status', 'Source', 'Approved', 'Notes'], $out);

@@ -147,6 +147,16 @@ final class SettingController extends Controller
                 $old = $id ? DB::one('SELECT * FROM employee_statuses WHERE id = ?', [$id]) : null;
                 $data = $this->employeeStatus($data, $old, $errors);
             }
+            if ($table === 'job_titles') {
+                // Management reporting uses only the 12 approved job titles (each has its own report forms).
+                $role = $id ? DB::value('SELECT report_role FROM job_titles WHERE id = ?', [$id]) : null;
+                if (!$id) {
+                    throw new ValidationException('Only the 12 approved job titles can be used, so new job titles cannot be added. You can change the department and options of an existing title.');
+                }
+                if ($role !== null && $data['title'] !== \App\Services\ReportCatalog::ROLES[$role][0]) {
+                    $errors['title'] = 'Approved job titles cannot be renamed.';
+                }
+            }
             if ($errors) {
                 throw new ValidationException('Please correct the highlighted fields.', $errors);
             }
@@ -179,6 +189,10 @@ final class SettingController extends Controller
         $this->findOr404("SELECT id FROM `$table` WHERE id = ?", [$id]);
         if ($table === 'employee_statuses' && DB::value('SELECT is_system FROM employee_statuses WHERE id = ?', [$id])) {
             flash('warning', 'Active, Probation and Left are built in and cannot be switched off.');
+            return redirect("/settings/$table");
+        }
+        if ($table === 'job_titles' && DB::value('SELECT report_role FROM job_titles WHERE id = ?', [$id]) !== null) {
+            flash('warning', 'The 12 approved job titles are always available and cannot be switched off.');
             return redirect("/settings/$table");
         }
         if ($toggle === null) {

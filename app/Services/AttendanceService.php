@@ -9,16 +9,20 @@ use App\Core\ValidationException;
 
 final class AttendanceService
 {
-    /** Attendance is recorded from the rota for shifts up to and including this UK date. */
-    public const ROTA_UNTIL = '2026-10-31';
+    /** Attendance is recorded from the rota for shifts (and days off) up to and including this UK date. */
+    public const ROTA_UNTIL = '2026-11-04';
 
     /**
-     * Records attendance from the rota: every published shift that has ended, from the employee's start date to
-     * ROTA_UNTIL, gets an attendance record with the shift's times (source "rota"). Days with approved leave, and
-     * shifts the employee already has real attendance for (web check-in, import, manual), are left alone. A rota
-     * record follows its shift when the shift changes, and is removed when the shift is cancelled or unpublished.
-     * Approved records are never touched. Safe to run any number of times.
-     * @return array{created:int, updated:int, removed:int}
+     * Records attendance from the rota, from the employee's start date to ROTA_UNTIL:
+     * - every published shift that has ended gets an attendance record with the shift's times (source "rota").
+     *   Check-ins the employee recorded themselves that day (web, import, manual) are replaced by it; the
+     *   original times are kept in the audit log.
+     * - every day without a published shift (from the first day on the rota) gets an "off" record, noted as a
+     *   bank holiday where it is one.
+     * Days with approved leave are left alone. A rota record follows its shift when the shift changes, and is
+     * removed when the shift is cancelled or unpublished. Approved records are never touched. Safe to run any
+     * number of times.
+     * @return array{created:int, updated:int, removed:int, replaced:int, off:int}
      */
     public static function fillFromRota(?int $employeeId = null, ?int $userId = null): array
     {
@@ -27,21 +31,26 @@ final class AttendanceService
         $empA = $employeeId ? ' AND employee_id = ' . (int) $employeeId : '';
         $shifts = DB::all("SELECT s.*, e.start_date AS emp_start, e.end_date AS emp_end FROM shifts s JOIN employees e ON e.id = s.employee_id
                             WHERE s.status = 'published' AND s.end_at <= ? AND e.deleted_at IS NULL $emp ORDER BY s.start_at", [$cutoff]);
-        $rota = [];
+        $rota = $offs = [];
         foreach (DB::all("SELECT * FROM attendance_records WHERE source = 'rota' $empA") as $a) {
-            $rota[(int) $a['shift_id']] = $a;
+            if ($a['status'] === 'off') {
+                $offs[$a['employee_id'] . '|' . $a['work_date']] = $a;
+            } else {
+                $rota[(int) $a['shift_id']] = $a;
+            }
         }
         $real = [];
-        foreach (DB::all("SELECT employee_id, check_in_at, COALESCE(check_out_at, DATE_ADD(check_in_at, INTERVAL 16 HOUR)) AS out_at FROM attendance_records WHERE source <> 'rota' $empA") as $a) {
-            $real[(int) $a['employee_id']][] = $a;
+        foreach (DB::all("SELECT *, COALESCE(check_out_at, DATE_ADD(check_in_at, INTERVAL 16 HOUR)) AS out_at FROM attendance_records WHERE source <> 'rota' $empA") as $a) {
+            $real[(int) $a['employee_id']][(int) $a['id']] = $a;
         }
         $leave = [];
         foreach (DB::all("SELECT employee_id, start_date, end_date FROM leave_requests WHERE status = 'approved' $empA") as $l) {
             $leave[(int) $l['employee_id']][] = $l;
         }
-        $created = $updated = $removed = 0;
+        $onLeave = fn (int $eid, string $date) => (bool) array_filter($leave[$eid] ?? [], fn ($l) => $l['start_date'] <= $date && $l['end_date'] >= $date);
+        $created = $updated = $removed = $replaced = $off = 0;
         $kept = [];
-        DB::transaction(function () use ($shifts, $rota, $real, $leave, $userId, &$created, &$updated, &$removed, &$kept) {
+        DB::transaction(function () use ($shifts, $rota, $offs, &$real, $onLeave, $employeeId, $empA, $userId, &$created, &$updated, &$removed, &$replaced, &$off, &$kept) {
             foreach ($shifts as $s) {
                 $eid = (int) $s['employee_id'];
                 $date = WeekBoundary::ukDateOfUtc($s['start_at']);
@@ -49,11 +58,28 @@ final class AttendanceService
                     continue;
                 }
                 $existing = $rota[(int) $s['id']] ?? null;
-                $overlapsReal = (bool) array_filter($real[$eid] ?? [], fn ($a) => $a['check_in_at'] < $s['end_at'] && $a['out_at'] > $s['start_at']);
-                if ($existing && $overlapsReal && !$existing['is_approved']) {
-                    DB::query('DELETE FROM attendance_records WHERE id = ?', [(int) $existing['id']]);   // real attendance wins
-                    $removed++;
-                    continue;
+                $sameDay = array_filter($real[$eid] ?? [], fn ($a) => $a['work_date'] === $date || ($a['check_in_at'] < $s['end_at'] && $a['out_at'] > $s['start_at']));
+                if ($onLeave($eid, $date)) {
+                    // On a leave day the employee's own record (if any) stands, as before.
+                    if ($existing && $sameDay && !$existing['is_approved']) {
+                        DB::query('DELETE FROM attendance_records WHERE id = ?', [(int) $existing['id']]);
+                        $removed++;
+                        continue;
+                    }
+                    if (!$existing) {
+                        continue;
+                    }
+                } else {
+                    // A working day: the rota wins over anything the employee recorded themselves.
+                    foreach ($sameDay as $a) {
+                        DB::query('DELETE FROM attendance_records WHERE id = ?', [(int) $a['id']]);
+                        unset($real[$eid][(int) $a['id']]);
+                        AuditLogger::log('attendance.replaced_by_rota', 'attendance', (int) $a['id'], sprintf('Check-in %s–%s on %s (%s) replaced by the rota shift %s–%s',
+                            uk_time($a['check_in_at']), $a['check_out_at'] ? uk_time($a['check_out_at']) : 'open', uk_date($a['work_date']), $a['source'], uk_time($s['start_at']), uk_time($s['end_at'])),
+                            ['employee_id' => $eid, 'check_in_at' => $a['check_in_at'], 'check_out_at' => $a['check_out_at'], 'status' => $a['status'], 'source' => $a['source'],
+                             'is_approved' => (int) $a['is_approved'], 'notes' => $a['notes'], 'shift_id' => (int) $s['id']], $userId);
+                        $replaced++;
+                    }
                 }
                 if ($existing) {
                     $kept[(int) $existing['id']] = true;
@@ -62,10 +88,6 @@ final class AttendanceService
                         DB::update('attendance_records', $data, 'id = ?', [(int) $existing['id']]);
                         $updated++;
                     }
-                    continue;
-                }
-                $onLeave = (bool) array_filter($leave[$eid] ?? [], fn ($l) => $l['start_date'] <= $date && $l['end_date'] >= $date);
-                if ($onLeave || $overlapsReal) {
                     continue;
                 }
                 $id = DB::insert('attendance_records', ['employee_id' => $eid, 'work_date' => $date, 'check_in_at' => $s['start_at'], 'check_out_at' => $s['end_at'],
@@ -82,12 +104,58 @@ final class AttendanceService
                     $removed++;
                 }
             }
+
+            // Days off: every day without a published shift, from the first day on the rota (or the start date) to ROTA_UNTIL.
+            $first = DB::value("SELECT MIN(start_at) FROM shifts WHERE status = 'published'");
+            $until = min(self::ROTA_UNTIL, uk_today());
+            $shiftDays = $realDays = $keptOff = [];
+            foreach (DB::all("SELECT employee_id, start_at FROM shifts WHERE status = 'published' $empA") as $s) {
+                $shiftDays[$s['employee_id'] . '|' . WeekBoundary::ukDateOfUtc($s['start_at'])] = true;
+            }
+            foreach ($real as $eid => $rows) {
+                foreach ($rows as $a) {
+                    $realDays[$eid . '|' . $a['work_date']] = true;
+                }
+            }
+            $holidays = array_column(DB::all('SELECT holiday_date, name FROM public_holidays WHERE region = ?', [(string) Settings::get('bank_holiday_region', 'england-and-wales')]), 'name', 'holiday_date');
+            $people = $first ? DB::all('SELECT id, start_date, end_date FROM employees WHERE deleted_at IS NULL' . ($employeeId ? ' AND id = ' . (int) $employeeId : '')) : [];
+            foreach ($people as $p) {
+                $eid = (int) $p['id'];
+                $from = max((string) $p['start_date'], WeekBoundary::ukDateOfUtc($first));
+                $to = $p['end_date'] ? min($until, (string) $p['end_date']) : $until;
+                for ($d = $from; $d <= $to; $d = date('Y-m-d', strtotime("$d +1 day"))) {
+                    $key = "$eid|$d";
+                    if (isset($shiftDays[$key]) || isset($realDays[$key]) || $onLeave($eid, $d)) {
+                        continue;
+                    }
+                    $note = isset($holidays[$d]) ? 'Bank holiday: ' . $holidays[$d] : 'Off: no shift on the rota';
+                    if (isset($offs[$key])) {
+                        $keptOff[(int) $offs[$key]['id']] = true;
+                        if ($offs[$key]['notes'] !== $note && !$offs[$key]['is_approved']) {
+                            DB::update('attendance_records', ['notes' => $note], 'id = ?', [(int) $offs[$key]['id']]);
+                        }
+                        continue;
+                    }
+                    $midnight = to_utc("$d 00:00");
+                    $id = DB::insert('attendance_records', ['employee_id' => $eid, 'work_date' => $d, 'check_in_at' => $midnight, 'check_out_at' => $midnight,
+                        'break_minutes' => 0, 'net_minutes' => 0, 'status' => 'off', 'source' => 'rota', 'notes' => $note, 'created_by' => $userId]);
+                    $keptOff[$id] = true;
+                    $off++;
+                }
+            }
+            // A day off that now has a shift, leave or the employee's own record (or is outside their employment) goes.
+            foreach ($offs as $a) {
+                if (!isset($keptOff[(int) $a['id']]) && !$a['is_approved']) {
+                    DB::query('DELETE FROM attendance_records WHERE id = ?', [(int) $a['id']]);
+                    $removed++;
+                }
+            }
         });
-        if ($created || $updated || $removed) {
-            AuditLogger::log('attendance.rota_filled', 'attendance', null, sprintf('Attendance from the rota: %d recorded, %d updated, %d removed', $created, $updated, $removed),
-                ['employee_id' => $employeeId, 'until' => self::ROTA_UNTIL], $userId);
+        if ($created || $updated || $removed || $replaced || $off) {
+            AuditLogger::log('attendance.rota_filled', 'attendance', null, sprintf('Attendance from the rota: %d recorded, %d updated, %d removed, %d check-ins replaced, %d days off',
+                $created, $updated, $removed, $replaced, $off), ['employee_id' => $employeeId, 'until' => self::ROTA_UNTIL], $userId);
         }
-        return ['created' => $created, 'updated' => $updated, 'removed' => $removed];
+        return ['created' => $created, 'updated' => $updated, 'removed' => $removed, 'replaced' => $replaced, 'off' => $off];
     }
 
     /** True when the employee has approved leave on the record's work date. */

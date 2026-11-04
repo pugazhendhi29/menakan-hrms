@@ -11,6 +11,7 @@ use App\Core\Response;
 use App\Services\ExcelIO;
 use App\Services\FileStore;
 use App\Services\ShiftImportService;
+use App\Services\ShiftService;
 
 final class ShiftImportController extends Controller
 {
@@ -20,7 +21,48 @@ final class ShiftImportController extends Controller
         return view('imports/index', ['title' => 'Shift Import', 'crumb' => 'Time', 'batches' => $batches, 'kind' => 'shift', 'base' => '/shift-import',
             'icon' => 'calendar-week',
             'columns' => ['Employee ID' => '', 'Date' => 'DD/MM/YYYY', 'Start' => 'HH:MM', 'End' => 'HH:MM', 'Break Minutes' => '', 'Shift Type' => '', 'Location' => '', 'Status' => 'Draft/Published', 'Notes' => 'optional'],
-            'help' => 'Times are UK time.']);
+            'help' => 'Times are UK time.',
+            'pattern' => ['employees' => $this->employeeOptions(), 'types' => DB::all('SELECT * FROM shift_types WHERE is_active = 1 ORDER BY default_start'),
+                'locations' => DB::all('SELECT id, name FROM locations WHERE is_active = 1 ORDER BY name')]]);
+    }
+
+    /** Deletes the chosen employees' shifts in a date range (all, drafts only or published only). */
+    public function deleteRange(Request $request): Response
+    {
+        return $this->attempt($request, '/shift-import#delete-shifts', function () use ($request) {
+            $n = ShiftService::deleteRange(['employee_ids' => $request->arr('employee_ids'), 'from' => $request->str('from'), 'to' => $request->str('to'),
+                'status' => $request->str('status', 'all')], $this->userId());
+            flash($n ? 'success' : 'info', $n ? sprintf('%d shift(s) deleted. Their days are now days off on the attendance record.', $n) : 'No shifts matched, so nothing was deleted.');
+            return redirect('/shift-import#delete-shifts');
+        });
+    }
+
+    /** Creates shifts from a pattern: employees, a date range, weekdays and times (bank holidays are left free). */
+    public function pattern(Request $request): Response
+    {
+        return $this->attempt($request, '/shift-import#pattern', function () use ($request) {
+            $in = $request->only(['from', 'to', 'start_time', 'end_time', 'break_minutes', 'shift_type_id', 'location_id', 'status', 'notes']);
+            $in['employee_ids'] = $request->arr('employee_ids');
+            $in['weekdays'] = $request->arr('weekdays');
+            $in['override_reason'] = $request->bool('approve_over_limit') ? $request->str('override_reason') : '';
+            $r = ShiftService::createPattern($in, $this->userId());
+            $skipped = implode(', ', array_map(fn ($k, $n) => "$n $k", array_keys($r['skipped']), $r['skipped']));
+            flash($r['created'] ? 'success' : 'warning', sprintf('%d shift(s) created.', $r['created']) . ($skipped ? " Skipped: $skipped." : ''));
+            foreach (array_slice($r['failed'], 0, 5) as $f) {
+                flash('danger', 'Not created: ' . $f);
+            }
+            if (count($r['failed']) > 5) {
+                flash('danger', sprintf('…and %d more not created.', count($r['failed']) - 5));
+            }
+            foreach (array_slice($r['warnings'], 0, 5) as $w) {
+                flash('warning', $w);
+            }
+            if (!$r['created']) {
+                return redirect('/shift-import#pattern');
+            }
+            $first = count($in['employee_ids']) === 1 ? '&employee_id=' . (int) $in['employee_ids'][0] : '';
+            return redirect('/shifts?view=month&date=' . $in['from'] . $first);
+        });
     }
 
     public function template(Request $request): Response

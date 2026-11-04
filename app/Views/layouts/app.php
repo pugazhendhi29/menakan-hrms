@@ -7,11 +7,32 @@ use App\Services\Notifier;
 $user = Auth::user();
 $path = $GLOBALS['__request_path'] ?? '/';
 $isAdmin = Auth::isAdmin();
-$unread = $user && $isAdmin ? Notifier::unreadCount((int) $user['id']) : 0;
+$unread = $user ? Notifier::unreadCount((int) $user['id']) : 0;
+$myEmployee = Auth::employeeId();
 $flashes = Session::takeFlashes();
 $nav = function (string $href, string $label, string $icon, bool $exact = false) use ($path): string {
     $on = $exact ? $path === $href : ($path === $href || str_starts_with($path, rtrim($href, '/') . '/'));
     return '<a class="side-link' . ($on ? ' on' : '') . '" href="' . e(url($href)) . '"' . ($on ? ' aria-current="page"' : '') . '><i class="bi bi-' . $icon . '" aria-hidden="true"></i><span>' . e($label) . '</span></a>';
+};
+$reportNav = function () use ($nav, $myEmployee, $isAdmin): string {
+    $out = '<div class="grp">Reporting</div>';
+    if ($myEmployee !== null && \App\Services\ReportAccess::roleOf($myEmployee) !== null) {
+        $out .= $nav('/reporting/my', 'My Reports', 'journal-text');
+    }
+    if (\App\Services\ReportAccess::isManager($myEmployee)) {
+        $out .= $nav('/reporting/team', 'Team Reports', 'people');
+    }
+    if (\App\Services\ReportAccess::seesCompany()) {
+        $out .= $nav('/reporting/directors', "Directors' Dashboard", 'buildings');
+    }
+    $out .= $nav('/reporting/reports', 'Report History', 'search');
+    $out .= $nav('/reporting/actions', 'Management Actions', 'list-check');
+    $out .= $nav('/reporting/hierarchy', 'Reporting Hierarchy', 'diagram-2');
+    if ($isAdmin) {
+        $out .= $nav('/reporting/lines', 'Reporting Lines', 'bezier2');
+        $out .= $nav('/reporting/templates', 'Report Templates', 'ui-checks-grid');
+    }
+    return $out;
 };
 $ukNow = uk_now();
 ?><!doctype html>
@@ -56,6 +77,7 @@ $ukNow = uk_now();
       <div class="grp">Communication</div>
       <?= $nav('/my-email', 'My Email', 'envelope-at') ?>
       <?= $nav('/news', 'News', 'megaphone') ?>
+      <?= $reportNav() ?>
       <div class="grp">Admin</div>
       <?= $nav('/users', 'Users', 'person-gear') ?>
       <?= $nav('/reports', 'Reports', 'bar-chart-line') ?>
@@ -77,6 +99,8 @@ $ukNow = uk_now();
       <?= $nav('/my-email', 'My Email', 'envelope-at') ?>
       <?= $nav('/my/id-card', 'My ID Card', 'person-badge') ?>
       <?= $nav('/my/news', 'News', 'megaphone') ?>
+      <?= $reportNav() ?>
+      <div class="grp">Account</div>
       <?= $nav('/account/password', 'My Account', 'key') ?>
     <?php endif; ?>
     </nav>
@@ -94,7 +118,7 @@ $ukNow = uk_now();
       </form>
       <?php endif; ?>
       <div class="sp"></div>
-      <?php if ($isAdmin): /* notifications are for admins only */ ?>
+      <?php if ($user): /* employees only get management report notifications */ ?>
       <a class="bell" href="<?= e(url('/notifications')) ?>" aria-label="Notifications<?= $unread ? " ($unread unread)" : '' ?>">
         <i class="bi bi-bell"></i><?php if ($unread): ?><em><?= $unread > 99 ? '99+' : $unread ?></em><?php endif; ?>
       </a>

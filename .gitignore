@@ -15,6 +15,7 @@
 /storage/photos/*
 /storage/p60/*
 /storage/cache/*
+/storage/staging/*
 !/storage/**/.gitkeep
 
 # Archives and backups (may contain .env or employee files)
@@ -27,3 +28,5 @@
 # Local tooling
 /.vscode/
 /.idea/
+# cPanel deploy token (never commit)
+/.cpanel-token

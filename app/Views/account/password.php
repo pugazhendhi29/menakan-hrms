@@ -41,5 +41,19 @@
         </dl>
       </div>
     </div>
+    <?php if ($user['employee_id']): ?>
+    <div class="card mt-3">
+      <div class="card-header">Management report emails</div>
+      <div class="card-body">
+        <form method="post" action="<?= e(url('/account/notifications')) ?>" class="d-flex flex-column gap-2">
+          <?= csrf_field() ?>
+          <div class="form-check"><input class="form-check-input" type="checkbox" id="report_emails" name="report_emails" value="1"<?= checked(!$user['report_email_opt_out']) ?>>
+            <label class="form-check-label" for="report_emails">Email me about my management reports (submissions, approvals, returns, deadlines and escalations)</label></div>
+          <div class="form-text">Notifications in the portal (the bell) are always shown.</div>
+          <div><button class="btn btn-outline-primary btn-sm" type="submit">Save</button></div>
+        </form>
+      </div>
+    </div>
+    <?php endif; ?>
   </div>
 </div>

@@ -89,7 +89,7 @@ final class EmployeeImportTest extends FeatureTestCase
         $given = EmployeeService::formatCode($prefix, 90, $pad);
         $batch = $this->import([
             $this->row(['first_name' => 'New', 'last_name' => 'Starter', 'department' => 'Drivers', 'designation' => 'Van Driver', 'start_date' => '03/11/2026', 'reporting_manager' => $this->code('empA')]),
-            $this->row(['employee_code' => $given, 'first_name' => 'Given', 'last_name' => 'Code', 'department' => 'Warehouse', 'designation' => 'Picker', 'start_date' => '2026-11-03', 'employment_type' => 'part_time']),
+            $this->row(['employee_code' => $given, 'first_name' => 'Given', 'last_name' => 'Code', 'department' => 'Warehouse', 'designation' => 'Freight Administrator', 'start_date' => '2026-11-03', 'employment_type' => 'part_time']),
         ]);
         $this->assertSame(['ready', 'ready'], array_column($this->rows($batch), 'result'), json_encode(array_column($this->rows($batch), 'messages')));
         EmployeeTransfer::confirm($batch, self::$f['admin']);

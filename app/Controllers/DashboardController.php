@@ -34,7 +34,7 @@ final class DashboardController extends Controller
                                 WHERE e.deleted_at IS NULL AND e.status <> 'left' $deptSql");
         [$dayStart, $dayEnd] = WeekBoundary::utcRangeForDates($today, $today);
         $rostered = (int) DB::value("SELECT COUNT(DISTINCT s.employee_id) FROM shifts s JOIN employees e ON e.id = s.employee_id WHERE s.status = 'published' AND s.start_at >= ? AND s.start_at < ? $deptSql", [$dayStart, $dayEnd]);
-        $present = (int) DB::value("SELECT COUNT(DISTINCT a.employee_id) FROM attendance_records a JOIN employees e ON e.id = a.employee_id WHERE a.work_date = ? $deptSql", [$today]);
+        $present = (int) DB::value("SELECT COUNT(DISTINCT a.employee_id) FROM attendance_records a JOIN employees e ON e.id = a.employee_id WHERE a.work_date = ? AND a.status <> 'off' $deptSql", [$today]);
         $absences = AttendanceService::absences($today, $today, null, $dept);
         $absentToday = count(array_filter($absences, fn ($a) => $a['day_status'] === 'absent'));
         $overLimit = HoursCalculator::overLimitForWeek($week, $dept);
@@ -58,7 +58,7 @@ final class DashboardController extends Controller
             $d = date('Y-m-d', strtotime("$today -$i days"));
             [$s, $e] = WeekBoundary::utcRangeForDates($d, $d);
             $labels[] = $i === 0 ? 'Today' : date('D d/m', strtotime($d));
-            $presentSeries[] = (int) DB::value("SELECT COUNT(DISTINCT a.employee_id) FROM attendance_records a JOIN employees e ON e.id = a.employee_id WHERE a.work_date = ? $deptSql", [$d]);
+            $presentSeries[] = (int) DB::value("SELECT COUNT(DISTINCT a.employee_id) FROM attendance_records a JOIN employees e ON e.id = a.employee_id WHERE a.work_date = ? AND a.status <> 'off' $deptSql", [$d]);
             $rosterSeries[] = (int) DB::value("SELECT COUNT(DISTINCT s.employee_id) FROM shifts s JOIN employees e ON e.id = s.employee_id WHERE s.status = 'published' AND s.start_at >= ? AND s.start_at < ? $deptSql", [$s, $e]);
         }
         $chart = [

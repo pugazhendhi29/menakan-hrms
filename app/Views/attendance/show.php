@@ -4,8 +4,8 @@
       <div class="card-header"><?= e($a['employee_code'] . ' ' . employee_name($a)) ?> · <?= e(uk_date($a['work_date'])) ?>
         <?php if (!$locked): ?><a class="btn btn-sm btn-outline-secondary" href="<?= e(url('/attendance/' . $a['id'] . '/edit')) ?>">Correct</a><?php endif; ?></div>
       <div class="card-body"><dl class="dl-grid">
-        <dt>Check in</dt><dd><?= e(uk_datetime($a['check_in_at'])) ?></dd>
-        <dt>Check out</dt><dd><?= e(uk_datetime($a['check_out_at'])) ?></dd>
+        <dt>Check in</dt><dd><?= e($a['status'] === 'off' ? '—' : uk_datetime($a['check_in_at'])) ?></dd>
+        <dt>Check out</dt><dd><?= e($a['status'] === 'off' ? '—' : uk_datetime($a['check_out_at'])) ?></dd>
         <dt>Unpaid break</dt><dd><?= e($a['break_minutes']) ?> minutes</dd>
         <dt>Net hours</dt><dd><?= e(hours($a['net_minutes'] === null ? null : (int) $a['net_minutes'])) ?></dd>
         <dt>Status</dt><dd><?= status_badge($a['status']) ?></dd>
@@ -16,7 +16,7 @@
       </dl></div>
     </div>
     <?php if ($locked): ?>
-      <div class="alert alert-info mt-3 mb-0"><i class="bi bi-lock"></i> Recorded from the rota. It follows the shift, and can only be changed on a day the employee is on approved leave.</div>
+      <div class="alert alert-info mt-3 mb-0"><i class="bi bi-lock"></i> <?= $a['status'] === 'off' ? 'Day off: there is no shift on the rota for this day. It changes automatically if a shift or leave is added.' : 'Recorded from the rota. It follows the shift, and can only be changed on a day the employee is on approved leave.' ?></div>
     <?php elseif ($a['source'] === 'rota' && $onLeave): ?>
       <form method="post" action="<?= e(url('/attendance/' . $a['id'] . '/remove')) ?>" class="card mt-3" data-confirm="Remove this attendance? The employee was on leave and did not work this shift.">
         <?= csrf_field() ?>

@@ -113,6 +113,129 @@ final class ShiftService
         return ['id' => $id, 'warnings' => $warnings];
     }
 
+    /**
+     * Creates shifts from a pattern: for each chosen employee, every chosen weekday from start to end date gets a
+     * shift with the same times. Bank holidays, days on approved leave, days outside the employee's employment and
+     * days that already have a shift are skipped; each shift goes through save() (limits, overlaps, attendance).
+     * @return array{created:int, skipped:array<string,int>, failed:string[], warnings:string[]}
+     */
+    public static function createPattern(array $input, int $userId): array
+    {
+        $v = Validator::make($input, [
+            'from' => 'required|date', 'to' => 'required|date', 'start_time' => 'required|time', 'end_time' => 'required|time',
+            'break_minutes' => 'required|integer|min:0|max:600', 'status' => 'required|in:draft,published',
+        ], ['from' => 'Start date', 'to' => 'End date', 'start_time' => 'Start time', 'end_time' => 'End time', 'break_minutes' => 'Break minutes']);
+        $errors = $v->fails() ? $v->errors() : [];
+        $employees = array_values(array_unique(array_filter(array_map('intval', (array) ($input['employee_ids'] ?? [])))));
+        $days = array_values(array_intersect(array_map('intval', (array) ($input['weekdays'] ?? [])), range(1, 7)));
+        if (!$employees) {
+            $errors['employee_ids'] = 'Choose at least one employee.';
+        }
+        if (!$days) {
+            $errors['weekdays'] = 'Choose at least one day of the week.';
+        }
+        if (!$errors && $input['to'] < $input['from']) {
+            $errors['to'] = 'The end date must be on or after the start date.';
+        }
+        if (!$errors && (strtotime($input['to']) - strtotime($input['from'])) / 86400 > 366) {
+            $errors['to'] = 'Create up to one year of shifts at a time.';
+        }
+        if ($errors) {
+            throw new ValidationException('Please correct the highlighted fields.', $errors);
+        }
+        $holidays = array_column(DB::all('SELECT holiday_date, name FROM public_holidays WHERE region = ? AND holiday_date BETWEEN ? AND ?',
+            [(string) Settings::get('bank_holiday_region', 'england-and-wales'), $input['from'], $input['to']]), 'name', 'holiday_date');
+
+        $created = 0;
+        $skipped = ['bank holiday' => 0, 'on leave' => 0, 'already has a shift' => 0, 'outside employment' => 0];
+        $failed = $warnings = [];
+        foreach ($employees as $eid) {
+            $e = DB::one("SELECT * FROM employees WHERE id = ? AND deleted_at IS NULL AND status <> 'left'", [$eid]);
+            if (!$e) {
+                $failed[] = "Employee #$eid is not an active employee.";
+                continue;
+            }
+            for ($d = $input['from']; $d <= $input['to']; $d = date('Y-m-d', strtotime("$d +1 day"))) {
+                if (!in_array((int) date('N', strtotime($d)), $days, true)) {
+                    continue;
+                }
+                if (isset($holidays[$d])) {
+                    $skipped['bank holiday']++;
+                    continue;
+                }
+                if ($d < $e['start_date'] || ($e['end_date'] && $d > $e['end_date'])) {
+                    $skipped['outside employment']++;
+                    continue;
+                }
+                if (DB::value("SELECT id FROM leave_requests WHERE employee_id = ? AND status = 'approved' AND ? BETWEEN start_date AND end_date LIMIT 1", [$eid, $d])) {
+                    $skipped['on leave']++;
+                    continue;
+                }
+                [$startUtc, $endUtc] = HoursCalculator::utcSpan($d, $input['start_time'], $input['end_time']);
+                if (DB::value("SELECT id FROM shifts WHERE employee_id = ? AND status <> 'cancelled' AND start_at < ? AND end_at > ? LIMIT 1", [$eid, $endUtc, $startUtc])) {
+                    $skipped['already has a shift']++;
+                    continue;
+                }
+                try {
+                    $r = self::save(null, ['employee_id' => $eid, 'date' => $d, 'start_time' => $input['start_time'], 'end_time' => $input['end_time'],
+                        'break_minutes' => $input['break_minutes'], 'shift_type_id' => $input['shift_type_id'] ?? '', 'location_id' => $input['location_id'] ?? '',
+                        'status' => $input['status'], 'notes' => $input['notes'] ?? '', 'override_reason' => $input['override_reason'] ?? ''], $userId);
+                    $created++;
+                    $warnings = array_merge($warnings, $r['warnings']);
+                } catch (ValidationException $ex) {
+                    $failed[] = $e['employee_code'] . ' ' . uk_date($d) . ': ' . $ex->getMessage();
+                }
+            }
+        }
+        AuditLogger::log('shift.pattern', 'shift', null, sprintf('Created %d %s shift(s) from a pattern, %s to %s', $created, $input['status'], uk_date($input['from']), uk_date($input['to'])),
+            ['employees' => $employees, 'weekdays' => $days, 'start' => $input['start_time'], 'end' => $input['end_time'], 'skipped' => $skipped, 'failed' => count($failed)], $userId);
+        return ['created' => $created, 'skipped' => array_filter($skipped), 'failed' => $failed, 'warnings' => array_values(array_unique($warnings))];
+    }
+
+    /**
+     * Deletes the chosen employees' shifts (not cancelled ones) that start between two UK dates, optionally only
+     * drafts or only published ones. Their rota attendance goes too (approved records are kept) and the days
+     * become days off. No notifications; every deleted shift is in the audit log.
+     * @return int shifts deleted
+     */
+    public static function deleteRange(array $input, int $userId): int
+    {
+        $v = Validator::make($input, ['from' => 'required|date', 'to' => 'required|date', 'status' => 'required|in:all,draft,published'],
+            ['from' => 'Start date', 'to' => 'End date']);
+        $errors = $v->fails() ? $v->errors() : [];
+        $employees = array_values(array_unique(array_filter(array_map('intval', (array) ($input['employee_ids'] ?? [])))));
+        if (!$employees) {
+            $errors['employee_ids'] = 'Choose at least one employee.';
+        }
+        if (!$errors && $input['to'] < $input['from']) {
+            $errors['to'] = 'The end date must be on or after the start date.';
+        }
+        if ($errors) {
+            throw new ValidationException('Please correct the highlighted fields.', $errors);
+        }
+        $statuses = $input['status'] === 'all' ? ['draft', 'published'] : [$input['status']];
+        $shifts = DB::all('SELECT s.*, e.employee_code FROM shifts s JOIN employees e ON e.id = s.employee_id WHERE s.employee_id IN (' . DB::placeholders($employees) . ')
+                            AND s.status IN (' . DB::placeholders($statuses) . ') AND s.start_at >= ? AND s.start_at < ? ORDER BY s.start_at',
+            [...$employees, ...$statuses, to_utc($input['from'] . ' 00:00'), to_utc(date('Y-m-d', strtotime($input['to'] . ' +1 day')) . ' 00:00')]);
+        if (!$shifts) {
+            return 0;
+        }
+        $ids = array_map(fn ($s) => (int) $s['id'], $shifts);
+        DB::transaction(function () use ($ids, $shifts, $input, $employees, $userId) {
+            foreach (array_chunk($ids, 500) as $chunk) {
+                DB::query("DELETE FROM attendance_records WHERE source = 'rota' AND is_approved = 0 AND shift_id IN (" . DB::placeholders($chunk) . ')', $chunk);
+                DB::query('DELETE FROM shifts WHERE id IN (' . DB::placeholders($chunk) . ')', $chunk);
+            }
+            AuditLogger::log('shift.deleted', 'shift', null, sprintf('Deleted %d %s shift(s), %s to %s', count($ids), $input['status'] === 'all' ? 'draft and published' : $input['status'],
+                uk_date($input['from']), uk_date($input['to'])), ['employees' => $employees,
+                'shifts' => array_map(fn ($s) => ['id' => (int) $s['id'], 'employee' => $s['employee_code'], 'start_at' => $s['start_at'], 'end_at' => $s['end_at'], 'status' => $s['status']], $shifts)], $userId);
+        });
+        foreach (array_unique(array_map(fn ($s) => (int) $s['employee_id'], $shifts)) as $eid) {
+            AttendanceService::fillFromRota($eid, $userId);   // the freed days become days off
+        }
+        return count($ids);
+    }
+
     public static function approveException(int $employeeId, string $week, int $limit, int $total, string $reason, int $userId): void
     {
         DB::query(

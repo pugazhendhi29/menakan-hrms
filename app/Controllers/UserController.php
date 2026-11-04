@@ -81,7 +81,8 @@ final class UserController extends Controller
             throw new ValidationException('Please correct the highlighted fields.', $errors);
         }
         return ['username' => $username, 'email' => $email ?: null, 'role' => $role, 'employee_id' => $employeeId ?: null,
-            'can_backdate_threads' => $request->bool('can_backdate_threads') ? 1 : 0, 'can_edit_employees' => $request->bool('can_edit_employees') ? 1 : 0];
+            'can_backdate_threads' => $request->bool('can_backdate_threads') ? 1 : 0, 'can_edit_employees' => $request->bool('can_edit_employees') ? 1 : 0,
+            'can_backdate_reports' => $request->bool('can_backdate_reports') ? 1 : 0];
     }
 
     public function store(Request $request): Response

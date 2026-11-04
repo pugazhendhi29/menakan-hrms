@@ -109,7 +109,7 @@ $base = url('/employees/' . $e['id']);
   <thead><tr><th>Date</th><th>In</th><th>Out</th><th class="num">Break</th><th class="num">Net hrs</th><th>Status</th><th>Source</th><th>Approved</th></tr></thead>
   <tbody>
   <?php foreach ($attendance as $a): ?>
-    <tr><td><a href="<?= e(url('/attendance/' . $a['id'])) ?>"><?= e(uk_date($a['work_date'])) ?></a></td><td><?= e(uk_time($a['check_in_at'])) ?></td><td><?= e(uk_time($a['check_out_at'])) ?></td>
+    <tr><td><a href="<?= e(url('/attendance/' . $a['id'])) ?>"><?= e(uk_date($a['work_date'])) ?></a></td><td><?= e($a['status'] === 'off' ? '—' : uk_time($a['check_in_at'])) ?></td><td><?= e($a['status'] === 'off' ? '—' : uk_time($a['check_out_at'])) ?></td>
       <td class="num"><?= e($a['break_minutes']) ?></td><td class="num"><?= e(hours($a['net_minutes'])) ?></td><td><?= status_badge($a['status']) ?></td><td><?= e(ucfirst($a['source'])) ?></td><td><?= $a['is_approved'] ? '<i class="bi bi-check-circle text-success"></i>' : '' ?></td></tr>
   <?php endforeach; ?>
   <?php if (!$attendance): ?><tr><td colspan="8" class="empty">No attendance recorded.</td></tr><?php endif; ?>

@@ -56,6 +56,12 @@ final class Auth
         return (bool) (self::user()['can_edit_employees'] ?? false);
     }
 
+    /** Management reports access: whether this user may start reports for past periods (Users › Can create backdated reports). */
+    public static function canBackdateReports(): bool
+    {
+        return (bool) (self::user()['can_backdate_reports'] ?? false);
+    }
+
     public static function displayName(): string
     {
         $u = self::user();

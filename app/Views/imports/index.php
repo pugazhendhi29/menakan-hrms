@@ -65,3 +65,5 @@ $steps = [
     </div>
   </div>
 </div>
+
+<?php if (!empty($pattern)) { include __DIR__ . '/../shifts/_pattern.php'; include __DIR__ . '/../shifts/_delete.php'; } ?>

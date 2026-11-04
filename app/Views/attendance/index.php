@@ -11,7 +11,7 @@
     </select></div>
   <div><label class="form-label" for="status">Status</label>
     <select class="form-select form-select-sm" id="status" name="status"><option value="">All</option>
-      <?php foreach (['present' => 'Present', 'late' => 'Late', 'incomplete' => 'Incomplete'] as $k => $v): ?><option value="<?= $k ?>"<?= selected($k, $request->str('status')) ?>><?= $v ?></option><?php endforeach; ?>
+      <?php foreach (['present' => 'Present', 'late' => 'Late', 'incomplete' => 'Incomplete', 'off' => 'Off'] as $k => $v): ?><option value="<?= $k ?>"<?= selected($k, $request->str('status')) ?>><?= $v ?></option><?php endforeach; ?>
     </select></div>
   <div><label class="form-label" for="source">Source</label>
     <select class="form-select form-select-sm" id="source" name="source"><option value="">All</option>
@@ -43,8 +43,8 @@
         <td><span class="idc"><?= e($a['employee_code']) ?></span> <?= e(employee_name($a)) ?></td>
         <td class="text-nowrap"><?= e(uk_date($a['work_date'])) ?></td>
         <td class="text-nowrap text-muted-2"><?= $a['shift_start'] ? e(uk_time($a['shift_start']) . '–' . uk_time($a['shift_end'])) : '—' ?></td>
-        <td><?= e(uk_time($a['check_in_at'])) ?></td>
-        <td><?= e(uk_time($a['check_out_at'])) ?><?= $a['check_out_at'] && from_utc($a['check_out_at'])->format('Y-m-d') !== $a['work_date'] ? ' <small>(+1)</small>' : '' ?></td>
+        <td><?= e($a['status'] === 'off' ? '—' : uk_time($a['check_in_at'])) ?></td>
+        <td><?= e($a['status'] === 'off' ? '—' : uk_time($a['check_out_at'])) ?><?= $a['check_out_at'] && $a['status'] !== 'off' && from_utc($a['check_out_at'])->format('Y-m-d') !== $a['work_date'] ? ' <small>(+1)</small>' : '' ?></td>
         <td class="num"><?= e($a['break_minutes']) ?></td><td class="num"><?= e(hours($a['net_minutes'] === null ? null : (int) $a['net_minutes'])) ?></td>
         <td><?= status_badge($a['status']) ?><?= $a['is_approved'] ? ' <i class="bi bi-check-circle text-success" title="Approved"></i>' : '' ?></td>
         <td><?= $a['source'] === 'rota' ? '<span class="badge text-bg-info">From rota</span>' : e(ucfirst($a['source'])) ?></td>

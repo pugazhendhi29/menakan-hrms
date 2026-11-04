@@ -15,7 +15,7 @@
 <div class="card"><div class="card-header">Attendance <span class="fw-normal text-muted-2"><?= e(hours($total, 2)) ?> net hours in this period</span></div><div class="table-responsive"><table class="table">
   <thead><tr><th>Date</th><th>In</th><th>Out</th><th class="num">Break</th><th class="num">Net hrs</th><th>Status</th></tr></thead><tbody>
   <?php foreach ($rows as $a): ?>
-    <tr><td><?= e(uk_date($a['work_date'])) ?></td><td><?= e(uk_time($a['check_in_at'])) ?></td><td><?= e(uk_time($a['check_out_at'])) ?></td><td class="num"><?= e($a['break_minutes']) ?></td>
+    <tr><td><?= e(uk_date($a['work_date'])) ?></td><td><?= e($a['status'] === 'off' ? '—' : uk_time($a['check_in_at'])) ?></td><td><?= e($a['status'] === 'off' ? '—' : uk_time($a['check_out_at'])) ?></td><td class="num"><?= e($a['break_minutes']) ?></td>
       <td class="num"><?= e($a['net_minutes'] === null ? '—' : hours((int) $a['net_minutes'])) ?></td><td><?= status_badge($a['status']) ?></td></tr>
   <?php endforeach; ?>
   <?php if (!$rows): ?><tr><td colspan="6" class="empty">No attendance in this period.</td></tr><?php endif; ?>

@@ -23,6 +23,10 @@
           <div class="form-check"><input type="hidden" name="can_edit_employees" value="0"><input class="form-check-input" type="checkbox" id="can_edit_employees" name="can_edit_employees" value="1"<?= checked(old('can_edit_employees', $u['can_edit_employees'] ?? 0)) ?>>
             <label class="form-check-label" for="can_edit_employees">Can edit employee details</label></div>
           <div class="form-text">With this, the user can open the employee edit form and change details and photos. Without it, employee records are view-only.</div></fieldset>
+        <fieldset class="col-12"><legend class="form-label">Management reports access</legend>
+          <div class="form-check"><input type="hidden" name="can_backdate_reports" value="0"><input class="form-check-input" type="checkbox" id="can_backdate_reports" name="can_backdate_reports" value="1"<?= checked(old('can_backdate_reports', $u['can_backdate_reports'] ?? 0)) ?>>
+            <label class="form-check-label" for="can_backdate_reports">Can create backdated reports</label></div>
+          <div class="form-text">With this, the user can start a daily, weekly or monthly report for a past period (marked Backdated). Without it, they can only start reports for the current period, though they can still complete a report already marked Overdue.</div></fieldset>
         <?php if (!$u): ?>
         <div class="col-12"><label class="form-label" for="password">Temporary password <small class="text-muted-2">(optional)</small></label><input class="form-control<?= is_invalid('password') ?>" type="password" id="password" name="password" autocomplete="new-password"><?= field_error('password') ?>
           <div class="form-text">Leave blank to generate a one-time activation link instead (recommended). A temporary password must be changed at first sign-in.</div></div>

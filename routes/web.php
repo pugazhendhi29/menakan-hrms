@@ -23,6 +23,10 @@ use App\Controllers\NotificationController;
 use App\Controllers\P60Controller;
 use App\Controllers\PayslipController;
 use App\Controllers\ReportController;
+use App\Controllers\ReportingController;
+use App\Controllers\ReportingDashboardController;
+use App\Controllers\ReportingExportController;
+use App\Controllers\ReportingLinesController;
 use App\Controllers\SettingController;
 use App\Controllers\ShiftController;
 use App\Controllers\ShiftImportController;
@@ -46,6 +50,7 @@ return function (Router $r): void {
         $r->get('/', [DashboardController::class, 'home']);
         $r->get('/account/password', [AccountController::class, 'showPassword']);
         $r->post('/account/password', [AccountController::class, 'changePassword']);
+        $r->post('/account/notifications', [AccountController::class, 'notifications']);
 
         // ---- Organisation chart (everyone signed in can view; only admins see edit links)
         $r->get('/hierarchy', [HierarchyController::class, 'index']);
@@ -61,6 +66,38 @@ return function (Router $r): void {
         $r->get('/files/photo/{id}', [FileController::class, 'photo']);
         $r->get('/files/p60/{id}', [FileController::class, 'p60']);
         $r->get('/files/news-image/{year}/{month}/{name}', [FileController::class, 'newsImage']);
+
+        // ---- Notifications (the bell): admins get every kind, employees only management report notices.
+        $r->get('/notifications', [NotificationController::class, 'index']);
+        $r->post('/notifications/read-all', [NotificationController::class, 'readAll']);
+        $r->get('/notifications/{id}/open', [NotificationController::class, 'open']);
+
+        // ---- Management reporting. Each action checks access on the server: authors write their own reports,
+        // managers review the reports waiting for them, everyone sees only their own part of the hierarchy,
+        // Directors and HR admins see the whole company.
+        $r->get('/reporting', [ReportingDashboardController::class, 'home']);
+        $r->get('/reporting/my', [ReportingDashboardController::class, 'my']);
+        $r->get('/reporting/team', [ReportingDashboardController::class, 'team']);
+        $r->get('/reporting/directors', [ReportingDashboardController::class, 'directors']);
+        $r->get('/reporting/hierarchy', [ReportingDashboardController::class, 'hierarchy']);
+        $r->get('/reporting/templates', [ReportingDashboardController::class, 'templates']);
+        $r->get('/reporting/templates/{id}', [ReportingDashboardController::class, 'template']);
+        $r->get('/reporting/reports', [ReportingDashboardController::class, 'search']);
+        $r->get('/reporting/reports/export', [ReportingDashboardController::class, 'searchExport']);
+        $r->get('/reporting/export', [ReportingExportController::class, 'pack']);
+        $r->post('/reporting/start', [ReportingController::class, 'start']);
+        $r->get('/reporting/reports/{id}', [ReportingController::class, 'show']);
+        $r->get('/reporting/reports/{id}/edit', [ReportingController::class, 'edit']);
+        $r->post('/reporting/reports/{id}', [ReportingController::class, 'save']);
+        $r->post('/reporting/reports/{id}/review', [ReportingController::class, 'review']);
+        $r->post('/reporting/reports/{id}/attachments', [ReportingController::class, 'upload']);
+        $r->post('/reporting/reports/{id}/attachments/{attachmentId}/delete', [ReportingController::class, 'removeAttachment']);
+        $r->post('/reporting/reports/{id}/actions', [ReportingController::class, 'raiseAction']);
+        $r->get('/reporting/reports/{id}/pdf', [ReportingExportController::class, 'reportPdf']);
+        $r->get('/reporting/reports/{id}/xlsx', [ReportingExportController::class, 'reportXlsx']);
+        $r->get('/reporting/actions', [ReportingController::class, 'actions']);
+        $r->post('/reporting/actions/{id}', [ReportingController::class, 'updateAction']);
+        $r->get('/files/report-attachment/{id}', [ReportingController::class, 'attachment']);
 
         // ---- Employee self-service
         $r->group(['employee'], function (Router $r) {
@@ -87,10 +124,6 @@ return function (Router $r): void {
 
         // ---- Admin
         $r->group(['role:admin'], function (Router $r) {
-            // Notifications are for admins only (turned off for employees).
-            $r->get('/notifications', [NotificationController::class, 'index']);
-            $r->post('/notifications/read-all', [NotificationController::class, 'readAll']);
-            $r->get('/notifications/{id}/open', [NotificationController::class, 'open']);
             $r->get('/dashboard', [DashboardController::class, 'admin']);
 
             $r->get('/employees', [EmployeeController::class, 'index']);
@@ -152,6 +185,11 @@ return function (Router $r): void {
             $r->get('/documents', [DocumentController::class, 'index']);
             $r->get('/documents/upload', [DocumentController::class, 'create']);
             $r->post('/documents', [DocumentController::class, 'store']);
+            $r->get('/documents/bulk', [DocumentController::class, 'bulk']);
+            $r->post('/documents/bulk', [DocumentController::class, 'bulkUpload']);
+            $r->post('/documents/bulk/save', [DocumentController::class, 'bulkSave']);
+            $r->post('/documents/bulk/discard', [DocumentController::class, 'bulkDiscard']);
+            $r->get('/documents/bulk/file/{token}', [DocumentController::class, 'bulkFile']);
             $r->get('/documents/{id}/replace', [DocumentController::class, 'replaceForm']);
             $r->post('/documents/{id}/replace', [DocumentController::class, 'replace']);
             $r->post('/documents/{id}/verify', [DocumentController::class, 'verify']);
@@ -191,6 +229,8 @@ return function (Router $r): void {
             $r->get('/shift-import', [ShiftImportController::class, 'index']);
             $r->get('/shift-import/template', [ShiftImportController::class, 'template']);
             $r->post('/shift-import', [ShiftImportController::class, 'upload']);
+            $r->post('/shift-import/pattern', [ShiftImportController::class, 'pattern']);
+            $r->post('/shift-import/delete', [ShiftImportController::class, 'deleteRange']);
             $r->get('/shift-import/{id}', [ShiftImportController::class, 'show']);
             $r->post('/shift-import/{id}/confirm', [ShiftImportController::class, 'confirm']);
             $r->post('/shift-import/{id}/cancel', [ShiftImportController::class, 'cancel']);
@@ -234,6 +274,9 @@ return function (Router $r): void {
 
             $r->get('/reports', [ReportController::class, 'index']);
             $r->get('/reports/{key:[a-z_]+}', [ReportController::class, 'show']);
+
+            $r->get('/reporting/lines', [ReportingLinesController::class, 'index']);
+            $r->post('/reporting/lines', [ReportingLinesController::class, 'update']);
 
             $r->get('/settings', [SettingController::class, 'index']);
             $r->post('/settings', [SettingController::class, 'update']);

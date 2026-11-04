@@ -8,7 +8,9 @@ SET NAMES utf8mb4;
 SET time_zone = '+00:00';
 SET FOREIGN_KEY_CHECKS = 0;
 
-DROP TABLE IF EXISTS audit_logs, notifications, system_settings, news_thread_messages, news_threads, employee_import_rows, employee_import_batches, news_sender_checks, news_deliveries, news_posts, news_templates, id_cards, p60_documents, payslips,
+DROP TABLE IF EXISTS report_notices, management_actions, report_attachments, report_consolidations, report_reviews, report_metrics, report_versions, reports,
+  report_template_fields, report_templates,
+  audit_logs, notifications, system_settings, news_thread_messages, news_threads, employee_import_rows, employee_import_batches, news_sender_checks, news_deliveries, news_posts, news_templates, id_cards, p60_documents, payslips,
   leave_ledger, leave_requests, leave_entitlements, leave_types, public_holidays,
   hours_exceptions, shift_import_rows, shift_import_batches, shifts, locations, shift_types,
   attendance_import_rows, attendance_corrections, attendance_records, attendance_import_batches,
@@ -36,9 +38,11 @@ CREATE TABLE job_titles (
   department_id INT UNSIGNED NULL,
   is_driver     TINYINT(1)   NOT NULL DEFAULT 0,
   documents_optional TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = no mandatory documents; not shown in dashboard document alerts',
+  report_role   VARCHAR(40)  NULL COMMENT 'Approved reporting role (ReportCatalog::ROLES); NULL = not an approved title',
   is_active     TINYINT(1)   NOT NULL DEFAULT 1,
   created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_job_titles_title (title),
+  UNIQUE KEY uq_job_titles_report_role (report_role),
   CONSTRAINT fk_job_titles_department FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -200,6 +204,8 @@ CREATE TABLE users (
   must_change_password TINYINT(1)   NOT NULL DEFAULT 0,
   can_backdate_threads TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '1 = may date news thread emails before today',
   can_edit_employees   TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '1 = may edit employee details',
+  report_email_opt_out TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '1 = no emails about management reports',
+  can_backdate_reports TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '1 = may create backdated management reports',
   last_login_at        DATETIME     NULL,
   created_by           INT UNSIGNED NULL,
   created_at           DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -468,7 +474,7 @@ CREATE TABLE attendance_records (
   check_out_at    DATETIME     NULL COMMENT 'UTC',
   break_minutes   SMALLINT UNSIGNED NOT NULL DEFAULT 0,
   net_minutes     INT          NULL,
-  status          ENUM('present','late','incomplete') NOT NULL DEFAULT 'present',
+  status          ENUM('present','late','incomplete','off') NOT NULL DEFAULT 'present' COMMENT 'off = no shift on the rota that day',
   source          ENUM('web','import','manual','rota') NOT NULL COMMENT 'rota = recorded from the published shift (AttendanceService::fillFromRota)',
   shift_id        INT UNSIGNED NULL,
   import_batch_id INT UNSIGNED NULL,
@@ -852,3 +858,837 @@ INSERT INTO news_templates (name, subject, body) VALUES
  ('General announcement', 'Announcement from Menakan Transport', 'Dear {first_name},\n\n[Write the announcement here.]\n\nIf you have any questions, please contact HR.'),
  ('Policy update', 'Policy update: [policy name]', 'Dear {first_name},\n\nWe have updated the [policy name] policy. The main changes are:\n\n- [change 1]\n- [change 2]\n\nThe new policy applies from [date]. Please read it and contact HR with any questions.'),
  ('Site or depot notice', 'Notice: [subject]', 'Dear {first_name},\n\nPlease note: [details, including dates, times and location].\n\nThank you for your co-operation.');
+
+-- ================================================================ Management reporting
+-- ---------------------------------------------------------------- The 12 approved job titles (Management reporting)
+INSERT INTO job_titles (title, report_role) VALUES
+ ('Director', 'director'),
+ ('Transport Manager', 'transport_manager'),
+ ('Logistics Co-ordinator', 'logistics_coordinator'),
+ ('Delivery Service Manager', 'delivery_service_manager'),
+ ('Fleet Manager', 'fleet_manager'),
+ ('Business Support Manager', 'business_support_manager'),
+ ('Freight Administrator', 'freight_administrator'),
+ ('Distribution Service Manager', 'distribution_service_manager'),
+ ('Route Planning Manager', 'route_planning_manager'),
+ ('Business Development Manager', 'business_development_manager'),
+ ('Operations Supervisor', 'operations_supervisor'),
+ ('Financial Accounts Manager', 'financial_accounts_manager');
+
+-- ---------------------------------------------------------------- Templates (36 rows, seeded by 2026_10_31_report_templates.sql)
+CREATE TABLE report_templates (
+  id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  role_code   VARCHAR(40)  NOT NULL COMMENT 'job_titles.report_role',
+  period      ENUM('daily','weekly','monthly') NOT NULL,
+  title       VARCHAR(150) NOT NULL,
+  version     SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+  is_active   TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_report_templates (role_code, period, version)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE report_template_fields (
+  id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  template_id INT UNSIGNED NOT NULL,
+  section     ENUM('role','standard') NOT NULL,
+  field_key   VARCHAR(60)  NOT NULL,
+  label       VARCHAR(200) NOT NULL,
+  field_type  ENUM('int','dec','money','pct','text','calc') NOT NULL,
+  formula     VARCHAR(255) NULL COMMENT 'calc only: filled from daily data / weekly reports (ReportFormula)',
+  display     ENUM('int','dec','money','pct','text') NOT NULL,
+  is_required TINYINT(1)   NOT NULL DEFAULT 0,
+  is_kpi      TINYINT(1)   NOT NULL DEFAULT 0 COMMENT 'Shown on manager and Directors dashboards',
+  sort_order  SMALLINT UNSIGNED NOT NULL,
+  UNIQUE KEY uq_report_template_fields (template_id, field_key),
+  CONSTRAINT fk_rtf_template FOREIGN KEY (template_id) REFERENCES report_templates(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------- Reports
+-- One report per employee per period. Who it goes to is the employee's line manager at the time of submission.
+CREATE TABLE reports (
+  id                       INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  report_no                VARCHAR(20)  NULL COMMENT 'Report ID shown to people, e.g. MT-D-000123',
+  template_id              INT UNSIGNED NOT NULL,
+  employee_id              INT UNSIGNED NOT NULL COMMENT 'Author',
+  period                   ENUM('daily','weekly','monthly') NOT NULL,
+  period_start             DATE         NOT NULL,
+  period_end               DATE         NOT NULL,
+  status                   ENUM('draft','submitted','under_review','returned','approved','consolidated','forwarded','escalated','overdue','completed') NOT NULL DEFAULT 'draft',
+  data                     LONGTEXT     NULL COMMENT 'JSON working copy (draft). Submitted content lives in report_versions and never changes',
+  current_version          SMALLINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '0 = never submitted',
+  department_id            INT UNSIGNED NULL COMMENT 'At submission',
+  job_title_id             INT UNSIGNED NULL COMMENT 'At submission',
+  line_manager_id          INT UNSIGNED NULL COMMENT 'Assigned line manager at submission (the reviewer)',
+  escalated_to_employee_id INT UNSIGNED NULL COMMENT 'Next manager up when escalated; may then decide',
+  has_critical             TINYINT(1)   NOT NULL DEFAULT 0,
+  critical_note            VARCHAR(500) NULL,
+  is_late                  TINYINT(1)   NOT NULL DEFAULT 0,
+  is_backdated             TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '1 = created for a past period after its deadline (Backdated report)',
+  due_at                   DATETIME     NOT NULL COMMENT 'UTC',
+  submitted_at             DATETIME     NULL COMMENT 'Submission date and time shown on the report (people with backdated report access may set it)',
+  received_at              DATETIME     NULL COMMENT 'When the line manager actually received it (deadline reminders and escalation use this)',
+  decided_at               DATETIME     NULL,
+  forwarded_at             DATETIME     NULL,
+  completed_at             DATETIME     NULL,
+  created_by               INT UNSIGNED NULL,
+  created_at               DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at               DATETIME     NULL ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_reports_period (employee_id, period, period_start),
+  UNIQUE KEY uq_reports_no (report_no),
+  KEY idx_reports_manager (line_manager_id, status),
+  KEY idx_reports_escalated (escalated_to_employee_id, status),
+  KEY idx_reports_period (period, period_start, status),
+  CONSTRAINT fk_reports_template FOREIGN KEY (template_id) REFERENCES report_templates(id),
+  CONSTRAINT fk_reports_employee FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_reports_manager FOREIGN KEY (line_manager_id) REFERENCES employees(id) ON DELETE SET NULL,
+  CONSTRAINT fk_reports_escalated FOREIGN KEY (escalated_to_employee_id) REFERENCES employees(id) ON DELETE SET NULL,
+  CONSTRAINT fk_reports_department FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE SET NULL,
+  CONSTRAINT fk_reports_job_title FOREIGN KEY (job_title_id) REFERENCES job_titles(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Every submission is frozen here. Version 1 is the original; later versions are amendments with a reason.
+CREATE TABLE report_versions (
+  id             INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  report_id      INT UNSIGNED NOT NULL,
+  version_no     SMALLINT UNSIGNED NOT NULL,
+  data           LONGTEXT     NOT NULL COMMENT 'JSON: role fields, standard fields and calculated values as submitted',
+  consolidation  LONGTEXT     NULL COMMENT 'JSON snapshot of the team reports a manager consolidated',
+  amendment_note VARCHAR(1000) NULL COMMENT 'Why the report was changed (versions after 1)',
+  submitted_by   INT UNSIGNED NULL,
+  submitted_at   DATETIME     NOT NULL,
+  UNIQUE KEY uq_report_versions (report_id, version_no),
+  CONSTRAINT fk_report_versions_report FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Numeric values of the latest submitted version, for totals, trends and dashboards.
+CREATE TABLE report_metrics (
+  report_id INT UNSIGNED NOT NULL,
+  field_key VARCHAR(60)  NOT NULL,
+  value     DECIMAL(16,4) NOT NULL,
+  PRIMARY KEY (report_id, field_key),
+  KEY idx_report_metrics_key (field_key),
+  CONSTRAINT fk_report_metrics_report FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Manager assessments and approvals: every review action, with the manager's comment.
+CREATE TABLE report_reviews (
+  id                   INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  report_id            INT UNSIGNED NOT NULL,
+  version_no           SMALLINT UNSIGNED NOT NULL,
+  reviewer_employee_id INT UNSIGNED NULL,
+  reviewer_user_id     INT UNSIGNED NULL COMMENT 'NULL = the scheduler',
+  action               ENUM('opened','approved','returned','escalated','auto_escalated','commented') NOT NULL,
+  rating               TINYINT UNSIGNED NULL COMMENT '1-5 performance assessment',
+  comment              TEXT         NULL,
+  created_at           DATETIME     NOT NULL,
+  KEY idx_report_reviews_report (report_id, created_at),
+  CONSTRAINT fk_report_reviews_report FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE,
+  CONSTRAINT fk_report_reviews_employee FOREIGN KEY (reviewer_employee_id) REFERENCES employees(id) ON DELETE SET NULL,
+  CONSTRAINT fk_report_reviews_user FOREIGN KEY (reviewer_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- A manager's report consolidates the approved reports of their team for the same period.
+CREATE TABLE report_consolidations (
+  parent_report_id INT UNSIGNED NOT NULL,
+  child_report_id  INT UNSIGNED NOT NULL,
+  created_at       DATETIME     NOT NULL,
+  PRIMARY KEY (parent_report_id, child_report_id),
+  KEY idx_report_consolidations_child (child_report_id),
+  CONSTRAINT fk_rc_parent FOREIGN KEY (parent_report_id) REFERENCES reports(id) ON DELETE CASCADE,
+  CONSTRAINT fk_rc_child FOREIGN KEY (child_report_id) REFERENCES reports(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE report_attachments (
+  id                INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  report_id         INT UNSIGNED NOT NULL,
+  version_no        SMALLINT UNSIGNED NULL COMMENT 'Version it was submitted with; NULL while still a draft attachment',
+  storage_key       VARCHAR(255) NOT NULL,
+  original_filename VARCHAR(255) NOT NULL,
+  mime_type         VARCHAR(100) NOT NULL,
+  size_bytes        INT UNSIGNED NOT NULL,
+  uploaded_by       INT UNSIGNED NULL,
+  created_at        DATETIME     NOT NULL,
+  KEY idx_report_attachments (report_id),
+  CONSTRAINT fk_report_attachments_report FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Follow-up actions managers raise from reports (and Directors from consolidated reports).
+CREATE TABLE management_actions (
+  id                      INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  report_id               INT UNSIGNED NULL,
+  raised_by_employee_id   INT UNSIGNED NULL,
+  raised_by_user_id       INT UNSIGNED NULL,
+  assigned_to_employee_id INT UNSIGNED NOT NULL,
+  title                   VARCHAR(200) NOT NULL,
+  details                 TEXT         NULL,
+  priority                ENUM('low','medium','high','critical') NOT NULL DEFAULT 'medium',
+  due_date                DATE         NULL,
+  status                  ENUM('open','in_progress','done','cancelled') NOT NULL DEFAULT 'open',
+  resolution_note         VARCHAR(1000) NULL,
+  completed_at            DATETIME     NULL,
+  created_at              DATETIME     NOT NULL,
+  updated_at              DATETIME     NULL ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_management_actions_assignee (assigned_to_employee_id, status),
+  KEY idx_management_actions_report (report_id),
+  CONSTRAINT fk_ma_report FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE SET NULL,
+  CONSTRAINT fk_ma_assignee FOREIGN KEY (assigned_to_employee_id) REFERENCES employees(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_ma_raised_by FOREIGN KEY (raised_by_employee_id) REFERENCES employees(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Reminders the scheduler has already sent (so running it again sends nothing twice).
+CREATE TABLE report_notices (
+  notice_key VARCHAR(160) NOT NULL PRIMARY KEY,
+  created_at DATETIME     NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------- Settings (Settings page)
+INSERT INTO system_settings (`key`, `value`, type, label, description) VALUES
+ ('report_start_date',        '2026-11-02', 'string', 'Management reports: start date', 'Reports are expected (and can become overdue) from this date'),
+ ('report_daily_days',        '1,2,3,4,5', 'string', 'Management reports: daily report days', 'ISO weekdays, 1 = Monday ... 7 = Sunday, comma-separated'),
+ ('report_daily_due_time',    '18:00', 'string', 'Management reports: daily deadline (HH:MM)', 'Daily reports are due by this time on the day'),
+ ('report_weekly_due_days',   '1',    'int',    'Management reports: weekly deadline (days after Sunday)', 'Due at the daily deadline time on that day'),
+ ('report_monthly_due_days',  '3',    'int',    'Management reports: monthly deadline (days after month end)', 'Due at the daily deadline time on that day'),
+ ('report_reminder_hours',    '2',    'int',    'Management reports: reminder before deadline (hours)', NULL),
+ ('report_escalate_after_days','2',   'int',    'Management reports: escalate unreviewed reports after (days)', 'A report not approved or returned within this many days goes to the next manager up'),
+ ('report_email_enabled',     '1',    'bool',   'Management reports: send emails', 'Master switch; in-app notifications are always sent'),
+ ('report_email_submissions', '1',    'bool',   'Report emails: new submissions and reports awaiting approval', NULL),
+ ('report_email_decisions',   '1',    'bool',   'Report emails: approved or returned for correction', NULL),
+ ('report_email_deadlines',   '0',    'bool',   'Report emails: deadline reminders', NULL),
+ ('report_email_overdue',     '1',    'bool',   'Report emails: overdue reports', NULL),
+ ('report_email_escalations', '1',    'bool',   'Report emails: escalated issues', NULL),
+ ('report_email_actions',     '1',    'bool',   'Report emails: management actions', NULL);
+
+-- ---------------------------------------------------------------- Report templates (generated by bin/make-report-templates-sql.php)
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('director', 'daily', 'Director - Daily Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'company_position', 'Overall company position', 'text', NULL, 'text', 1, 0, 1),
+ (@t, 'role', 'operational_developments', 'Important operational developments', 'text', NULL, 'text', 0, 0, 2),
+ (@t, 'role', 'critical_issues', 'Critical business issues', 'text', NULL, 'text', 0, 0, 3),
+ (@t, 'role', 'decisions_made', 'Important decisions made', 'text', NULL, 'text', 0, 0, 4),
+ (@t, 'role', 'financial_concerns', 'Financial or commercial concerns', 'text', NULL, 'text', 0, 0, 5),
+ (@t, 'role', 'immediate_attention', 'Issues requiring immediate attention', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 7),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 12);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('director', 'weekly', 'Director - Weekly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'business_performance', 'Overall business performance', 'text', NULL, 'text', 1, 0, 1),
+ (@t, 'role', 'department_updates', 'Department management updates', 'text', NULL, 'text', 0, 0, 2),
+ (@t, 'role', 'revenue_profitability', 'Revenue and profitability overview', 'text', NULL, 'text', 0, 0, 3),
+ (@t, 'role', 'operational_performance', 'Operational performance', 'text', NULL, 'text', 0, 0, 4),
+ (@t, 'role', 'bd_opportunities', 'Business development opportunities', 'text', NULL, 'text', 0, 0, 5),
+ (@t, 'role', 'risks_decisions', 'Major risks and decisions', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 7),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 12);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('director', 'monthly', 'Director - Monthly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'company_performance', 'Company performance', 'text', NULL, 'text', 1, 0, 1),
+ (@t, 'role', 'objectives_achieved', 'Strategic objectives achieved', 'text', NULL, 'text', 0, 0, 2),
+ (@t, 'role', 'department_comparison', 'Department performance comparisons', 'text', NULL, 'text', 0, 0, 3),
+ (@t, 'role', 'business_growth', 'Business growth', 'text', NULL, 'text', 0, 0, 4),
+ (@t, 'role', 'financial_performance', 'Financial performance', 'text', NULL, 'text', 0, 0, 5),
+ (@t, 'role', 'strategic_decisions', 'Strategic decisions', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'next_month_priorities', 'Priorities for the next month', 'text', NULL, 'text', 1, 0, 7),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 8),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 13);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('transport_manager', 'daily', 'Transport Manager - Daily Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'drivers_available', 'Drivers available', 'int', NULL, 'int', 1, 1, 1),
+ (@t, 'role', 'drivers_allocated', 'Drivers allocated', 'int', NULL, 'int', 1, 0, 2),
+ (@t, 'role', 'vehicles_available', 'Vehicles available', 'int', NULL, 'int', 1, 0, 3),
+ (@t, 'role', 'vehicles_allocated', 'Vehicles allocated', 'int', NULL, 'int', 1, 1, 4),
+ (@t, 'role', 'jobs_received', 'Jobs received', 'int', NULL, 'int', 1, 1, 5),
+ (@t, 'role', 'jobs_completed', 'Jobs completed', 'int', NULL, 'int', 1, 1, 6),
+ (@t, 'role', 'outstanding_deliveries', 'Outstanding deliveries', 'int', NULL, 'int', 1, 0, 7),
+ (@t, 'role', 'delayed_deliveries', 'Delayed deliveries', 'int', NULL, 'int', 1, 1, 8),
+ (@t, 'role', 'failed_deliveries', 'Failed deliveries', 'int', NULL, 'int', 1, 1, 9),
+ (@t, 'role', 'drivers_present', 'Driver attendance: drivers present', 'int', NULL, 'int', 1, 0, 10),
+ (@t, 'role', 'drivers_absent', 'Driver attendance: drivers absent', 'int', NULL, 'int', 1, 0, 11),
+ (@t, 'role', 'accidents_incidents', 'Accidents and incidents (number)', 'int', NULL, 'int', 1, 1, 12),
+ (@t, 'role', 'incident_details', 'Accidents and incidents: details', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'role', 'transport_issues', 'Transport issues', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'role', 'corrective_actions', 'Corrective actions', 'text', NULL, 'text', 0, 0, 15),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 16),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 17),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 18),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 19),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 20),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 21);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('transport_manager', 'weekly', 'Transport Manager - Weekly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'total_jobs_completed', 'Total jobs completed', 'calc', 'sum(jobs_completed)', 'int', 0, 1, 1),
+ (@t, 'role', 'driver_productivity', 'Driver productivity (jobs per allocated driver-day)', 'calc', 'ratio(sum(jobs_completed),sum(drivers_allocated))', 'dec', 0, 1, 2),
+ (@t, 'role', 'vehicle_utilisation', 'Vehicle utilisation (%)', 'calc', 'pct(sum(vehicles_allocated),sum(vehicles_available))', 'pct', 0, 1, 3),
+ (@t, 'role', 'delivery_success_rate', 'Delivery success rate (%)', 'calc', 'success(sum(jobs_completed),sum(failed_deliveries))', 'pct', 0, 1, 4),
+ (@t, 'role', 'fuel_costs', 'Fuel costs (£)', 'money', NULL, 'money', 1, 1, 5),
+ (@t, 'role', 'transport_costs', 'Other transport costs (£)', 'money', NULL, 'money', 1, 0, 6),
+ (@t, 'role', 'driver_performance', 'Driver performance', 'text', NULL, 'text', 1, 0, 7),
+ (@t, 'role', 'accidents_total', 'Accidents and incidents', 'calc', 'sum(accidents_incidents)', 'int', 0, 0, 8),
+ (@t, 'role', 'breakdowns', 'Vehicle breakdowns', 'int', NULL, 'int', 1, 0, 9),
+ (@t, 'role', 'outstanding_issues', 'Outstanding operational issues', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 11),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 15),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 16);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('transport_manager', 'monthly', 'Transport Manager - Monthly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'transport_performance', 'Overall transport performance', 'text', NULL, 'text', 1, 0, 1),
+ (@t, 'role', 'jobs_completed_month', 'Jobs completed', 'calc', 'sum(jobs_completed)', 'int', 0, 1, 2),
+ (@t, 'role', 'transport_costs_month', 'Transport costs (£, fuel and other)', 'calc', 'wsum(fuel_costs)+wsum(transport_costs)', 'money', 0, 1, 3),
+ (@t, 'role', 'cost_efficiency', 'Transport costs and efficiency', 'text', NULL, 'text', 0, 0, 4),
+ (@t, 'role', 'driver_trends', 'Driver performance trends', 'text', NULL, 'text', 0, 0, 5),
+ (@t, 'role', 'vehicle_utilisation_month', 'Vehicle utilisation (%)', 'calc', 'pct(sum(vehicles_allocated),sum(vehicles_available))', 'pct', 0, 1, 6),
+ (@t, 'role', 'delivery_success_month', 'Delivery success rate (%)', 'calc', 'success(sum(jobs_completed),sum(failed_deliveries))', 'pct', 0, 1, 7),
+ (@t, 'role', 'delivery_performance', 'Delivery performance', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'role', 'operational_improvements', 'Operational improvements', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'role', 'transport_budget', 'Transport budget for the month (£)', 'money', NULL, 'money', 1, 0, 10),
+ (@t, 'role', 'recommendations', 'Recommendations', 'text', NULL, 'text', 1, 0, 11),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 12),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 15),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 16),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 17);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('logistics_coordinator', 'daily', 'Logistics Co-ordinator - Daily Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'jobs_received', 'Jobs received', 'int', NULL, 'int', 1, 1, 1),
+ (@t, 'role', 'jobs_processed', 'Jobs processed', 'int', NULL, 'int', 1, 1, 2),
+ (@t, 'role', 'collections_coordinated', 'Collections coordinated', 'int', NULL, 'int', 1, 1, 3),
+ (@t, 'role', 'deliveries_coordinated', 'Deliveries coordinated', 'int', NULL, 'int', 1, 1, 4),
+ (@t, 'role', 'communication', 'Customer and driver communication', 'text', NULL, 'text', 0, 0, 5),
+ (@t, 'role', 'outstanding_jobs', 'Outstanding jobs', 'int', NULL, 'int', 1, 0, 6),
+ (@t, 'role', 'delayed_consignments', 'Delayed consignments', 'int', NULL, 'int', 1, 1, 7),
+ (@t, 'role', 'documents_completed', 'Documentation completed (number of documents)', 'int', NULL, 'int', 1, 0, 8),
+ (@t, 'role', 'logistics_problems', 'Logistics problems', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 10),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 15);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('logistics_coordinator', 'weekly', 'Logistics Co-ordinator - Weekly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'total_coordinated', 'Total jobs coordinated', 'calc', 'sum(collections_coordinated)+sum(deliveries_coordinated)', 'int', 0, 1, 1),
+ (@t, 'role', 'jobs_completed_week', 'Jobs completed', 'calc', 'sum(jobs_processed)', 'int', 0, 0, 2),
+ (@t, 'role', 'jobs_outstanding_week', 'Jobs outstanding at the end of the week', 'calc', 'last(outstanding_jobs)', 'int', 0, 0, 3),
+ (@t, 'role', 'coordination_efficiency', 'Coordination efficiency (% of jobs received that were processed)', 'calc', 'pct(sum(jobs_processed),sum(jobs_received))', 'pct', 0, 1, 4),
+ (@t, 'role', 'delayed_week', 'Delayed consignments', 'calc', 'sum(delayed_consignments)', 'int', 0, 1, 5),
+ (@t, 'role', 'stakeholder_communication', 'Customer and supplier communication', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'documentation_errors', 'Documentation errors', 'int', NULL, 'int', 1, 1, 7),
+ (@t, 'role', 'operational_improvements', 'Operational improvements', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 14);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('logistics_coordinator', 'monthly', 'Logistics Co-ordinator - Monthly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'jobs_received_month', 'Monthly logistics activity: jobs received', 'calc', 'sum(jobs_received)', 'int', 0, 1, 1),
+ (@t, 'role', 'jobs_processed_month', 'Monthly logistics activity: jobs processed', 'calc', 'sum(jobs_processed)', 'int', 0, 1, 2),
+ (@t, 'role', 'coordination_performance', 'Coordination performance', 'text', NULL, 'text', 1, 0, 3),
+ (@t, 'role', 'service_efficiency', 'Service efficiency (% processed)', 'calc', 'pct(sum(jobs_processed),sum(jobs_received))', 'pct', 0, 1, 4),
+ (@t, 'role', 'recurring_problems', 'Recurring operational problems', 'text', NULL, 'text', 0, 0, 5),
+ (@t, 'role', 'documentation_accuracy', 'Documentation accuracy (%)', 'calc', 'accuracy(sum(documents_completed),wsum(documentation_errors))', 'pct', 0, 1, 6),
+ (@t, 'role', 'process_improvements', 'Process improvements', 'text', NULL, 'text', 0, 0, 7),
+ (@t, 'role', 'recommendations', 'Recommendations', 'text', NULL, 'text', 1, 0, 8),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 14);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('delivery_service_manager', 'daily', 'Delivery Service Manager - Daily Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'deliveries_scheduled', 'Deliveries scheduled', 'int', NULL, 'int', 1, 1, 1),
+ (@t, 'role', 'deliveries_completed', 'Deliveries completed', 'int', NULL, 'int', 1, 1, 2),
+ (@t, 'role', 'failed_deliveries', 'Failed deliveries', 'int', NULL, 'int', 1, 1, 3),
+ (@t, 'role', 'delivery_delays', 'Delivery delays', 'int', NULL, 'int', 1, 1, 4),
+ (@t, 'role', 'customer_complaints', 'Customer complaints', 'int', NULL, 'int', 1, 1, 5),
+ (@t, 'role', 'driver_performance', 'Driver performance', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'service_issues', 'Delivery service issues', 'text', NULL, 'text', 0, 0, 7),
+ (@t, 'role', 'corrective_actions', 'Corrective actions', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 14);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('delivery_service_manager', 'weekly', 'Delivery Service Manager - Weekly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'total_deliveries', 'Total deliveries completed', 'calc', 'sum(deliveries_completed)', 'int', 0, 1, 1),
+ (@t, 'role', 'success_rate', 'Delivery success rate (%)', 'calc', 'success(sum(deliveries_completed),sum(failed_deliveries))', 'pct', 0, 1, 2),
+ (@t, 'role', 'failed_week', 'Failed deliveries', 'calc', 'sum(failed_deliveries)', 'int', 0, 1, 3),
+ (@t, 'role', 'delayed_week', 'Delayed deliveries', 'calc', 'sum(delivery_delays)', 'int', 0, 0, 4),
+ (@t, 'role', 'customer_satisfaction', 'Customer satisfaction score (%)', 'pct', NULL, 'pct', 1, 1, 5),
+ (@t, 'role', 'complaints_received', 'Complaints received', 'calc', 'sum(customer_complaints)', 'int', 0, 1, 6),
+ (@t, 'role', 'complaints_resolved', 'Complaints resolved', 'int', NULL, 'int', 1, 0, 7),
+ (@t, 'role', 'driver_productivity', 'Driver productivity', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'role', 'service_performance_issues', 'Service performance issues', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 10),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 15);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('delivery_service_manager', 'monthly', 'Delivery Service Manager - Monthly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'service_performance', 'Overall delivery service performance', 'text', NULL, 'text', 1, 0, 1),
+ (@t, 'role', 'success_rate_month', 'Delivery success rate (%)', 'calc', 'success(sum(deliveries_completed),sum(failed_deliveries))', 'pct', 0, 1, 2),
+ (@t, 'role', 'success_trends', 'Delivery success trends', 'text', NULL, 'text', 0, 0, 3),
+ (@t, 'role', 'satisfaction_month', 'Customer satisfaction (average %, from weekly reports)', 'calc', 'wavg(customer_satisfaction)', 'pct', 0, 1, 4),
+ (@t, 'role', 'failed_month', 'Failed deliveries', 'calc', 'sum(failed_deliveries)', 'int', 0, 1, 5),
+ (@t, 'role', 'failed_analysis', 'Failed delivery analysis', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'service_quality', 'Service quality', 'text', NULL, 'text', 0, 0, 7),
+ (@t, 'role', 'driver_trends', 'Driver performance trends', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'role', 'recommendations', 'Service improvement recommendations', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 10),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 15);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('fleet_manager', 'daily', 'Fleet Manager - Daily Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'vehicles_available', 'Vehicles available', 'int', NULL, 'int', 1, 1, 1),
+ (@t, 'role', 'inspections', 'Vehicle inspections completed', 'int', NULL, 'int', 1, 0, 2),
+ (@t, 'role', 'defects_reported', 'Defects reported', 'int', NULL, 'int', 1, 1, 3),
+ (@t, 'role', 'vehicles_off_road', 'Vehicles off the road (VOR)', 'int', NULL, 'int', 1, 1, 4),
+ (@t, 'role', 'repairs_completed', 'Repairs completed', 'int', NULL, 'int', 1, 0, 5),
+ (@t, 'role', 'maintenance_outstanding', 'Maintenance jobs outstanding', 'int', NULL, 'int', 1, 0, 6),
+ (@t, 'role', 'mot_insurance', 'MOT and insurance concerns', 'text', NULL, 'text', 0, 0, 7),
+ (@t, 'role', 'vehicle_incidents', 'Vehicle incidents (number)', 'int', NULL, 'int', 1, 1, 8),
+ (@t, 'role', 'incident_details', 'Vehicle incidents: details', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 10),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 15);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('fleet_manager', 'weekly', 'Fleet Manager - Weekly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'fleet_availability', 'Fleet availability (average vehicles available per day)', 'calc', 'avg(vehicles_available)', 'dec', 0, 1, 1),
+ (@t, 'role', 'vor_average', 'Vehicles off the road (average per day)', 'calc', 'avg(vehicles_off_road)', 'dec', 0, 0, 2),
+ (@t, 'role', 'vehicle_utilisation', 'Vehicle utilisation (%)', 'pct', NULL, 'pct', 1, 1, 3),
+ (@t, 'role', 'maintenance_completed', 'Maintenance and repairs completed', 'calc', 'sum(repairs_completed)', 'int', 0, 1, 4),
+ (@t, 'role', 'breakdowns', 'Breakdowns', 'int', NULL, 'int', 1, 1, 5),
+ (@t, 'role', 'repair_costs', 'Repair costs (£)', 'money', NULL, 'money', 1, 1, 6),
+ (@t, 'role', 'vehicle_compliance', 'Vehicle compliance', 'text', NULL, 'text', 0, 0, 7),
+ (@t, 'role', 'outstanding_repairs', 'Outstanding repairs at the end of the week', 'calc', 'last(maintenance_outstanding)', 'int', 0, 0, 8),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 14);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('fleet_manager', 'monthly', 'Fleet Manager - Monthly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'fleet_performance', 'Fleet performance', 'text', NULL, 'text', 1, 0, 1),
+ (@t, 'role', 'maintenance_costs', 'Total maintenance costs (£)', 'calc', 'wsum(repair_costs)', 'money', 0, 1, 2),
+ (@t, 'role', 'downtime', 'Vehicle downtime (vehicle-days off the road)', 'calc', 'sum(vehicles_off_road)', 'int', 0, 1, 3),
+ (@t, 'role', 'breakdowns_month', 'Breakdowns', 'calc', 'wsum(breakdowns)', 'int', 0, 1, 4),
+ (@t, 'role', 'breakdown_trends', 'Breakdown trends', 'text', NULL, 'text', 0, 0, 5),
+ (@t, 'role', 'replacement_requirements', 'Vehicle replacement requirements', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'mot_insurance_compliance', 'Insurance and MOT compliance', 'text', NULL, 'text', 1, 0, 7),
+ (@t, 'role', 'recommendations', 'Fleet efficiency recommendations', 'text', NULL, 'text', 1, 0, 8),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 14);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('business_support_manager', 'daily', 'Business Support Manager - Daily Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'administrative_activities', 'Administrative activities', 'text', NULL, 'text', 1, 0, 1),
+ (@t, 'role', 'staff_support', 'Internal staff support requests handled', 'int', NULL, 'int', 1, 1, 2),
+ (@t, 'role', 'documents_processed', 'Documents processed', 'int', NULL, 'int', 1, 1, 3),
+ (@t, 'role', 'support_requests', 'Business support requests received', 'int', NULL, 'int', 1, 1, 4),
+ (@t, 'role', 'outstanding_tasks', 'Outstanding tasks', 'int', NULL, 'int', 1, 1, 5),
+ (@t, 'role', 'management_attention', 'Issues requiring management attention', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 7),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 12);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('business_support_manager', 'weekly', 'Business Support Manager - Weekly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'workload', 'Business support workload (requests received)', 'calc', 'sum(support_requests)', 'int', 0, 1, 1),
+ (@t, 'role', 'administrative_performance', 'Administrative performance', 'text', NULL, 'text', 1, 0, 2),
+ (@t, 'role', 'tasks_completed_week', 'Tasks completed (support handled and documents processed)', 'calc', 'sum(staff_support)+sum(documents_processed)', 'int', 0, 1, 3),
+ (@t, 'role', 'outstanding_requests', 'Outstanding requests at the end of the week', 'calc', 'last(outstanding_tasks)', 'int', 0, 1, 4),
+ (@t, 'role', 'department_support', 'Department support', 'text', NULL, 'text', 0, 0, 5),
+ (@t, 'role', 'process_issues', 'Process issues', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'improvement_actions', 'Improvement actions', 'text', NULL, 'text', 0, 0, 7),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 8),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 13);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('business_support_manager', 'monthly', 'Business Support Manager - Monthly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'support_performance', 'Business support performance', 'text', NULL, 'text', 1, 0, 1),
+ (@t, 'role', 'administrative_efficiency', 'Administrative efficiency', 'text', NULL, 'text', 0, 0, 2),
+ (@t, 'role', 'requests_month', 'Department support statistics: requests received', 'calc', 'sum(support_requests)', 'int', 0, 1, 3),
+ (@t, 'role', 'handled_month', 'Department support statistics: requests handled', 'calc', 'sum(staff_support)', 'int', 0, 1, 4),
+ (@t, 'role', 'documents_month', 'Documents processed', 'calc', 'sum(documents_processed)', 'int', 0, 0, 5),
+ (@t, 'role', 'process_improvements', 'Process improvements', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'resource_requirements', 'Resource requirements', 'text', NULL, 'text', 0, 0, 7),
+ (@t, 'role', 'outstanding_issues', 'Outstanding issues', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'role', 'recommendations', 'Recommendations', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 10),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 15);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('freight_administrator', 'daily', 'Freight Administrator - Daily Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'bookings_processed', 'Freight bookings processed', 'int', NULL, 'int', 1, 1, 1),
+ (@t, 'role', 'consignment_documents', 'Consignment documentation completed', 'int', NULL, 'int', 1, 0, 2),
+ (@t, 'role', 'delivery_paperwork', 'Delivery paperwork completed', 'int', NULL, 'int', 1, 0, 3),
+ (@t, 'role', 'stakeholder_updates', 'Customer and supplier updates', 'text', NULL, 'text', 0, 0, 4),
+ (@t, 'role', 'invoices_processed', 'Invoices and supporting documents processed', 'int', NULL, 'int', 1, 1, 5),
+ (@t, 'role', 'missing_documentation', 'Missing documentation', 'int', NULL, 'int', 1, 1, 6),
+ (@t, 'role', 'booking_errors', 'Booking errors', 'int', NULL, 'int', 1, 1, 7),
+ (@t, 'role', 'outstanding_admin', 'Outstanding administrative tasks', 'int', NULL, 'int', 1, 0, 8),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 14);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('freight_administrator', 'weekly', 'Freight Administrator - Weekly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'total_bookings', 'Total bookings processed', 'calc', 'sum(bookings_processed)', 'int', 0, 1, 1),
+ (@t, 'role', 'documentation_accuracy', 'Documentation accuracy (%)', 'calc', 'accuracy(sum(consignment_documents)+sum(delivery_paperwork),sum(missing_documentation))', 'pct', 0, 1, 2),
+ (@t, 'role', 'outstanding_paperwork', 'Outstanding paperwork at the end of the week', 'calc', 'last(outstanding_admin)', 'int', 0, 0, 3),
+ (@t, 'role', 'admin_workload', 'Freight administration workload', 'text', NULL, 'text', 1, 0, 4),
+ (@t, 'role', 'booking_amendments', 'Booking amendments', 'int', NULL, 'int', 1, 0, 5),
+ (@t, 'role', 'customer_communication', 'Customer communication', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'administrative_errors', 'Administrative errors (booking errors)', 'calc', 'sum(booking_errors)', 'int', 0, 1, 7),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 8),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 13);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('freight_administrator', 'monthly', 'Freight Administrator - Monthly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'bookings_month', 'Monthly freight bookings', 'calc', 'sum(bookings_processed)', 'int', 0, 1, 1),
+ (@t, 'role', 'amendments_month', 'Booking amendments', 'calc', 'wsum(booking_amendments)', 'int', 0, 0, 2),
+ (@t, 'role', 'documentation_accuracy_month', 'Documentation accuracy (%)', 'calc', 'accuracy(sum(consignment_documents)+sum(delivery_paperwork),sum(missing_documentation))', 'pct', 0, 1, 3),
+ (@t, 'role', 'productivity', 'Administrative productivity', 'text', NULL, 'text', 1, 0, 4),
+ (@t, 'role', 'booking_errors_month', 'Booking errors', 'calc', 'sum(booking_errors)', 'int', 0, 1, 5),
+ (@t, 'role', 'error_trends', 'Booking error trends', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'outstanding_paperwork_month', 'Outstanding paperwork at month end', 'calc', 'last(outstanding_admin)', 'int', 0, 0, 7),
+ (@t, 'role', 'process_improvements', 'Process improvements', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'role', 'recommendations', 'Recommendations', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 10),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 15);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('distribution_service_manager', 'daily', 'Distribution Service Manager - Daily Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'jobs_received', 'Distribution jobs received', 'int', NULL, 'int', 1, 1, 1),
+ (@t, 'role', 'routes_allocated', 'Distribution routes allocated', 'int', NULL, 'int', 1, 0, 2),
+ (@t, 'role', 'vehicles_assigned', 'Vehicles assigned', 'int', NULL, 'int', 1, 0, 3),
+ (@t, 'role', 'drivers_assigned', 'Drivers assigned', 'int', NULL, 'int', 1, 0, 4),
+ (@t, 'role', 'collections_completed', 'Collections completed', 'int', NULL, 'int', 1, 1, 5),
+ (@t, 'role', 'deliveries_completed', 'Deliveries completed', 'int', NULL, 'int', 1, 1, 6),
+ (@t, 'role', 'distribution_delays', 'Distribution delays', 'int', NULL, 'int', 1, 1, 7),
+ (@t, 'role', 'failed_jobs', 'Failed distribution jobs', 'int', NULL, 'int', 1, 1, 8),
+ (@t, 'role', 'operational_issues', 'Operational issues', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 10),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 15);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('distribution_service_manager', 'weekly', 'Distribution Service Manager - Weekly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'distribution_performance', 'Distribution performance', 'text', NULL, 'text', 1, 0, 1),
+ (@t, 'role', 'total_completed', 'Total jobs completed', 'calc', 'sum(collections_completed)+sum(deliveries_completed)', 'int', 0, 1, 2),
+ (@t, 'role', 'route_efficiency', 'Route efficiency (jobs completed per route)', 'calc', 'ratio(sum(collections_completed)+sum(deliveries_completed),sum(routes_allocated))', 'dec', 0, 1, 3),
+ (@t, 'role', 'vehicle_utilisation', 'Vehicle utilisation (%)', 'pct', NULL, 'pct', 1, 1, 4),
+ (@t, 'role', 'driver_productivity', 'Driver productivity (jobs per driver-day)', 'calc', 'ratio(sum(collections_completed)+sum(deliveries_completed),sum(drivers_assigned))', 'dec', 0, 1, 5),
+ (@t, 'role', 'delays_week', 'Distribution delays', 'calc', 'sum(distribution_delays)', 'int', 0, 0, 6),
+ (@t, 'role', 'failed_week', 'Failed deliveries', 'calc', 'sum(failed_jobs)', 'int', 0, 1, 7),
+ (@t, 'role', 'operational_improvements', 'Operational improvements', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 14);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('distribution_service_manager', 'monthly', 'Distribution Service Manager - Monthly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'overall_performance', 'Overall distribution performance', 'text', NULL, 'text', 1, 0, 1),
+ (@t, 'role', 'distribution_efficiency', 'Distribution efficiency (% of jobs completed, not failed)', 'calc', 'success(sum(collections_completed)+sum(deliveries_completed),sum(failed_jobs))', 'pct', 0, 1, 2),
+ (@t, 'role', 'route_trends', 'Route performance trends', 'text', NULL, 'text', 0, 0, 3),
+ (@t, 'role', 'operational_costs', 'Operational costs (£)', 'money', NULL, 'money', 1, 1, 4),
+ (@t, 'role', 'vehicle_utilisation_month', 'Vehicle utilisation (average %, from weekly reports)', 'calc', 'wavg(vehicle_utilisation)', 'pct', 0, 1, 5),
+ (@t, 'role', 'service_quality', 'Service quality', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'improvement_plans', 'Distribution improvement plans', 'text', NULL, 'text', 1, 0, 7),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 8),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 13);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('route_planning_manager', 'daily', 'Route Planning Manager - Daily Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'routes_planned', 'Routes planned', 'int', NULL, 'int', 1, 1, 1),
+ (@t, 'role', 'jobs_allocated', 'Jobs allocated', 'int', NULL, 'int', 1, 1, 2),
+ (@t, 'role', 'drivers_assigned', 'Drivers assigned', 'int', NULL, 'int', 1, 0, 3),
+ (@t, 'role', 'vehicles_allocated', 'Vehicles allocated', 'int', NULL, 'int', 1, 0, 4),
+ (@t, 'role', 'route_changes', 'Route changes', 'int', NULL, 'int', 1, 1, 5),
+ (@t, 'role', 'missed_delayed', 'Missed or delayed jobs', 'int', NULL, 'int', 1, 1, 6),
+ (@t, 'role', 'planning_issues', 'Planning issues', 'text', NULL, 'text', 0, 0, 7),
+ (@t, 'role', 'actions', 'Actions taken', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 14);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('route_planning_manager', 'weekly', 'Route Planning Manager - Weekly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'total_routes', 'Total routes planned', 'calc', 'sum(routes_planned)', 'int', 0, 1, 1),
+ (@t, 'role', 'planning_accuracy', 'Planning accuracy (% of routes run without changes)', 'calc', 'accuracy(sum(routes_planned),sum(route_changes))', 'pct', 0, 1, 2),
+ (@t, 'role', 'route_efficiency', 'Route efficiency (jobs per route)', 'calc', 'ratio(sum(jobs_allocated),sum(routes_planned))', 'dec', 0, 1, 3),
+ (@t, 'role', 'allocation_efficiency', 'Vehicle and driver allocation efficiency', 'text', NULL, 'text', 0, 0, 4),
+ (@t, 'role', 'unplanned_changes', 'Unplanned route changes', 'calc', 'sum(route_changes)', 'int', 0, 0, 5),
+ (@t, 'role', 'delayed_week', 'Delayed deliveries (missed or delayed jobs)', 'calc', 'sum(missed_delayed)', 'int', 0, 1, 6),
+ (@t, 'role', 'fuel_efficiency', 'Fuel efficiency (miles per gallon)', 'dec', NULL, 'dec', 1, 1, 7),
+ (@t, 'role', 'planned_mileage', 'Planned mileage (miles)', 'int', NULL, 'int', 1, 0, 8),
+ (@t, 'role', 'planning_improvements', 'Planning improvements', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 10),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 15);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('route_planning_manager', 'monthly', 'Route Planning Manager - Monthly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'planning_performance', 'Route planning performance', 'text', NULL, 'text', 1, 0, 1),
+ (@t, 'role', 'efficiency_trends', 'Route efficiency trends', 'text', NULL, 'text', 0, 0, 2),
+ (@t, 'role', 'mileage_month', 'Mileage (planned miles, from weekly reports)', 'calc', 'wsum(planned_mileage)', 'int', 0, 1, 3),
+ (@t, 'role', 'mileage_analysis', 'Mileage analysis', 'text', NULL, 'text', 0, 0, 4),
+ (@t, 'role', 'vehicle_utilisation', 'Vehicle utilisation', 'text', NULL, 'text', 0, 0, 5),
+ (@t, 'role', 'planning_accuracy_month', 'Planning accuracy (%)', 'calc', 'accuracy(sum(routes_planned),sum(route_changes))', 'pct', 0, 1, 6),
+ (@t, 'role', 'cost_savings', 'Operational cost savings (£)', 'money', NULL, 'money', 1, 1, 7),
+ (@t, 'role', 'recommendations', 'Route optimisation recommendations', 'text', NULL, 'text', 1, 0, 8),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 14);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('business_development_manager', 'daily', 'Business Development Manager - Daily Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'enquiries', 'New business enquiries', 'int', NULL, 'int', 1, 1, 1),
+ (@t, 'role', 'customers_contacted', 'Potential customers contacted', 'int', NULL, 'int', 1, 1, 2),
+ (@t, 'role', 'calls_meetings', 'Sales calls and meetings', 'int', NULL, 'int', 1, 1, 3),
+ (@t, 'role', 'quotations', 'Quotations prepared', 'int', NULL, 'int', 1, 1, 4),
+ (@t, 'role', 'quotation_value', 'Value of quotations prepared (£)', 'money', NULL, 'money', 1, 0, 5),
+ (@t, 'role', 'new_opportunities', 'New opportunities', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'follow_ups', 'Customer follow-ups', 'int', NULL, 'int', 1, 0, 7),
+ (@t, 'role', 'bd_activities', 'Business development activities', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 14);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('business_development_manager', 'weekly', 'Business Development Manager - Weekly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'leads_generated', 'New leads generated', 'calc', 'sum(enquiries)', 'int', 0, 1, 1),
+ (@t, 'role', 'customer_meetings', 'Customer meetings and calls', 'calc', 'sum(calls_meetings)', 'int', 0, 0, 2),
+ (@t, 'role', 'quotations_submitted', 'Quotations submitted', 'calc', 'sum(quotations)', 'int', 0, 1, 3),
+ (@t, 'role', 'opportunities', 'New business opportunities', 'text', NULL, 'text', 0, 0, 4),
+ (@t, 'role', 'pipeline_value', 'Sales pipeline value (£)', 'money', NULL, 'money', 1, 1, 5),
+ (@t, 'role', 'deals_secured', 'Deals secured', 'int', NULL, 'int', 1, 1, 6),
+ (@t, 'role', 'deals_value', 'Value of deals secured (£)', 'money', NULL, 'money', 1, 1, 7),
+ (@t, 'role', 'lost_opportunities', 'Lost opportunities', 'int', NULL, 'int', 1, 0, 8),
+ (@t, 'role', 'lost_reasons', 'Lost opportunities: reasons', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'role', 'follow_up_actions', 'Follow-up actions', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 11),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 15),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 16);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('business_development_manager', 'monthly', 'Business Development Manager - Monthly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'new_customers', 'New customers secured', 'calc', 'wsum(deals_secured)', 'int', 0, 1, 1),
+ (@t, 'role', 'new_business_revenue', 'Revenue generated from new business (£)', 'money', NULL, 'money', 1, 1, 2),
+ (@t, 'role', 'pipeline_month', 'Sales pipeline value at month end (£)', 'calc', 'wlast(pipeline_value)', 'money', 0, 1, 3),
+ (@t, 'role', 'conversion_rate', 'Conversion rate (% of quotations that became deals)', 'calc', 'pct(wsum(deals_secured),sum(quotations))', 'pct', 0, 1, 4),
+ (@t, 'role', 'customer_acquisition', 'Customer acquisition', 'text', NULL, 'text', 0, 0, 5),
+ (@t, 'role', 'growth_opportunities', 'Business growth opportunities', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'competitor_observations', 'Competitor observations', 'text', NULL, 'text', 0, 0, 7),
+ (@t, 'role', 'next_month_target', 'Next month''s sales target (£)', 'money', NULL, 'money', 1, 0, 8),
+ (@t, 'role', 'next_month_targets', 'Next month''s sales targets: details', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 10),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 15);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('operations_supervisor', 'daily', 'Operations Supervisor - Daily Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'staff_rostered', 'Staff rostered', 'int', NULL, 'int', 1, 0, 1),
+ (@t, 'role', 'staff_present', 'Staff attendance: staff present', 'int', NULL, 'int', 1, 1, 2),
+ (@t, 'role', 'work_allocated', 'Daily work allocation (tasks allocated)', 'int', NULL, 'int', 1, 0, 3),
+ (@t, 'role', 'team_tasks_completed', 'Tasks completed by the team', 'int', NULL, 'int', 1, 1, 4),
+ (@t, 'role', 'team_productivity', 'Team productivity', 'text', NULL, 'text', 0, 0, 5),
+ (@t, 'role', 'operational_problems', 'Operational problems', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'performance_issues', 'Employee performance issues', 'text', NULL, 'text', 0, 0, 7),
+ (@t, 'role', 'health_safety_concerns', 'Health and safety concerns (number)', 'int', NULL, 'int', 1, 1, 8),
+ (@t, 'role', 'health_safety_details', 'Health and safety concerns: details', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'role', 'actions', 'Actions taken', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 11),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 15),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 16);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('operations_supervisor', 'weekly', 'Operations Supervisor - Weekly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'team_performance', 'Team performance', 'text', NULL, 'text', 1, 0, 1),
+ (@t, 'role', 'attendance_rate', 'Staff attendance (% of rostered staff present)', 'calc', 'pct(sum(staff_present),sum(staff_rostered))', 'pct', 0, 1, 2),
+ (@t, 'role', 'late_arrivals', 'Punctuality: late arrivals', 'int', NULL, 'int', 1, 0, 3),
+ (@t, 'role', 'work_completion', 'Work completion (% of allocated tasks completed)', 'calc', 'pct(sum(team_tasks_completed),sum(work_allocated))', 'pct', 0, 1, 4),
+ (@t, 'role', 'productivity_issues', 'Productivity issues', 'text', NULL, 'text', 0, 0, 5),
+ (@t, 'role', 'operational_incidents', 'Operational incidents (health and safety)', 'calc', 'sum(health_safety_concerns)', 'int', 0, 1, 6),
+ (@t, 'role', 'outstanding_team_tasks', 'Outstanding tasks', 'text', NULL, 'text', 0, 0, 7),
+ (@t, 'role', 'staff_support', 'Staff support requirements', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 14);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('operations_supervisor', 'monthly', 'Operations Supervisor - Monthly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'team_performance_month', 'Overall team performance', 'text', NULL, 'text', 1, 0, 1),
+ (@t, 'role', 'productivity_trends', 'Employee productivity trends', 'text', NULL, 'text', 0, 0, 2),
+ (@t, 'role', 'attendance_month', 'Attendance (% of rostered staff present)', 'calc', 'pct(sum(staff_present),sum(staff_rostered))', 'pct', 0, 1, 3),
+ (@t, 'role', 'late_month', 'Late arrivals', 'calc', 'wsum(late_arrivals)', 'int', 0, 0, 4),
+ (@t, 'role', 'operational_efficiency', 'Operational efficiency (% of allocated tasks completed)', 'calc', 'pct(sum(team_tasks_completed),sum(work_allocated))', 'pct', 0, 1, 5),
+ (@t, 'role', 'training_requirements', 'Staff training requirements', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'recurring_problems', 'Recurring problems', 'text', NULL, 'text', 0, 0, 7),
+ (@t, 'role', 'recommendations', 'Improvement recommendations', 'text', NULL, 'text', 1, 0, 8),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 9),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 14);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('financial_accounts_manager', 'daily', 'Financial Accounts Manager - Daily Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'payments_received', 'Customer payments received (£)', 'money', NULL, 'money', 1, 1, 1),
+ (@t, 'role', 'supplier_invoices', 'Supplier invoices received (number)', 'int', NULL, 'int', 1, 0, 2),
+ (@t, 'role', 'supplier_invoices_value', 'Supplier invoices received (£)', 'money', NULL, 'money', 1, 0, 3),
+ (@t, 'role', 'payments_processed', 'Payments processed (£)', 'money', NULL, 'money', 1, 1, 4),
+ (@t, 'role', 'invoices_raised', 'Customer invoices raised (number)', 'int', NULL, 'int', 1, 1, 5),
+ (@t, 'role', 'invoices_raised_value', 'Customer invoices raised (£)', 'money', NULL, 'money', 1, 1, 6),
+ (@t, 'role', 'payment_queries', 'Outstanding payment queries', 'int', NULL, 'int', 1, 0, 7),
+ (@t, 'role', 'bank_issues', 'Bank and transaction issues', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'role', 'urgent_matters', 'Urgent financial matters', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 10),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 15);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('financial_accounts_manager', 'weekly', 'Financial Accounts Manager - Weekly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'weekly_income', 'Weekly income (£)', 'calc', 'sum(payments_received)', 'money', 0, 1, 1),
+ (@t, 'role', 'weekly_expenditure', 'Weekly expenditure (£)', 'calc', 'sum(payments_processed)', 'money', 0, 1, 2),
+ (@t, 'role', 'outstanding_invoices', 'Outstanding customer invoices (£)', 'money', NULL, 'money', 1, 1, 3),
+ (@t, 'role', 'supplier_commitments', 'Supplier payment commitments (£)', 'money', NULL, 'money', 1, 0, 4),
+ (@t, 'role', 'debtors_over_90', 'Aged debtors over 90 days (£)', 'money', NULL, 'money', 1, 1, 5),
+ (@t, 'role', 'aged_debtors', 'Aged debtors overview', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'cash_position', 'Cash flow position: closing cash balance (£)', 'money', NULL, 'money', 1, 1, 7),
+ (@t, 'role', 'discrepancies', 'Financial discrepancies', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'role', 'actions_required', 'Actions required', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 10),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 11),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 12),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 15);
+INSERT INTO report_templates (role_code, period, title, version) VALUES ('financial_accounts_manager', 'monthly', 'Financial Accounts Manager - Monthly Report', 1);
+SET @t = LAST_INSERT_ID();
+INSERT INTO report_template_fields (template_id, section, field_key, label, field_type, formula, display, is_required, is_kpi, sort_order) VALUES
+ (@t, 'role', 'monthly_revenue', 'Monthly revenue: customer invoices raised (£)', 'calc', 'sum(invoices_raised_value)', 'money', 0, 1, 1),
+ (@t, 'role', 'monthly_receipts', 'Customer payments received (£)', 'calc', 'sum(payments_received)', 'money', 0, 0, 2),
+ (@t, 'role', 'monthly_expenditure', 'Monthly expenditure (£)', 'calc', 'sum(payments_processed)', 'money', 0, 1, 3),
+ (@t, 'role', 'net_cash_movement', 'Profit and loss summary: receipts less expenditure (£)', 'calc', 'sum(payments_received)-sum(payments_processed)', 'money', 0, 1, 4),
+ (@t, 'role', 'pl_summary', 'Profit and loss summary', 'text', NULL, 'text', 1, 0, 5),
+ (@t, 'role', 'debtor_creditor', 'Debtor and creditor position', 'text', NULL, 'text', 0, 0, 6),
+ (@t, 'role', 'outstanding_invoices_month', 'Outstanding invoices at month end (£)', 'calc', 'wlast(outstanding_invoices)', 'money', 0, 1, 7),
+ (@t, 'role', 'cash_flow_analysis', 'Cash flow analysis', 'text', NULL, 'text', 0, 0, 8),
+ (@t, 'role', 'budget_performance', 'Budget performance', 'text', NULL, 'text', 0, 0, 9),
+ (@t, 'role', 'financial_risks', 'Financial risks', 'text', NULL, 'text', 0, 0, 10),
+ (@t, 'role', 'recommendations', 'Recommendations', 'text', NULL, 'text', 1, 0, 11),
+ (@t, 'standard', 'tasks_completed', 'Tasks completed', 'text', NULL, 'text', 1, 0, 12),
+ (@t, 'standard', 'tasks_outstanding', 'Tasks outstanding', 'text', NULL, 'text', 0, 0, 13),
+ (@t, 'standard', 'problems', 'Problems encountered', 'text', NULL, 'text', 0, 0, 14),
+ (@t, 'standard', 'actions_taken', 'Actions taken', 'text', NULL, 'text', 0, 0, 15),
+ (@t, 'standard', 'support_required', 'Support required', 'text', NULL, 'text', 0, 0, 16),
+ (@t, 'standard', 'comments', 'Additional comments', 'text', NULL, 'text', 0, 0, 17);
+-- ---------------------------------------------------------------- End of report templates

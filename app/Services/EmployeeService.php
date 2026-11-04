@@ -246,6 +246,15 @@ final class EmployeeService
         if (!isset($errors['email']) && $data['email'] && DB::value('SELECT id FROM employees WHERE email = ? AND id <> ?', [$data['email'], $id ?? 0])) {
             $errors['email'] = 'Another employee already uses this email address.';
         }
+        // Designation: one of the job titles in Settings (the approved list); new titles are not created from here.
+        // An employee may keep a title that has since been switched off until HR assigns an approved one.
+        if (!isset($errors['designation']) && $data['designation']) {
+            $job = DB::one('SELECT id, is_active FROM job_titles WHERE LOWER(title) = LOWER(?)', [trim((string) $data['designation'])]);
+            $current = $id !== null ? DB::value('SELECT job_title_id FROM employees WHERE id = ?', [$id]) : null;
+            if (!$job || (!$job['is_active'] && (int) $current !== (int) $job['id'])) {
+                $errors['designation'] = 'Choose one of the approved job titles: ' . implode(', ', array_map(fn ($r) => $r[0], ReportCatalog::ROLES)) . '.';
+            }
+        }
         // Reporting manager: an employee ID or exact full name links to that employee; anything else is kept as text.
         [$data['line_manager_id'], $data['reporting_manager_name']] = self::resolveManager((string) $data['reporting_manager']);
         unset($data['reporting_manager']);
@@ -310,8 +319,9 @@ final class EmployeeService
     }
 
     /**
-     * Turns the typed department, designation and location into their records,
-     * creating any that do not exist yet (matching is case-insensitive).
+     * Turns the typed department, designation and location into their records, creating departments and
+     * locations that do not exist yet (matching is case-insensitive). Designations were checked against the
+     * approved job titles in validate(); the fallback below only runs for data that skipped validation.
      */
     private static function resolveLookups(array &$data, int $userId): void
     {
@@ -392,6 +402,15 @@ final class EmployeeService
             }
             self::resolveLookups($data, $userId);
             DB::update('employees', $data, 'id = ?', [$id]);
+            // The annual leave entitlement is pro-rated from these, so a change recalculates every leave year already set up.
+            foreach (['start_date', 'end_date', 'work_pattern_id'] as $k) {
+                if (array_key_exists($k, $data) && (string) $data[$k] !== (string) $before[$k]) {
+                    foreach (DB::column('SELECT DISTINCT leave_year FROM leave_entitlements WHERE employee_id = ?', [$id]) as $year) {
+                        LeaveService::recalculate($id, (int) $year, $userId);
+                    }
+                    break;
+                }
+            }
             if ($data['status'] === 'left' && $before['status'] !== 'left') {
                 DB::update('users', ['is_active' => 0], 'employee_id = ?', [$id]);
                 DB::query('UPDATE user_sessions s JOIN users u ON u.id = s.user_id SET s.revoked_at = ? WHERE u.employee_id = ? AND s.revoked_at IS NULL', [now_utc(), $id]);

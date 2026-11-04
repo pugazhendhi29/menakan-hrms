@@ -46,4 +46,15 @@ final class AccountController extends Controller
         flash('success', 'Your password has been changed. Other devices have been signed out.');
         return redirect('/account/password');
     }
+
+    /** Management report emails on or off for this account (in-app notifications always arrive). */
+    public function notifications(Request $request): Response
+    {
+        $user = $this->user();
+        $optOut = $request->bool('report_emails') ? 0 : 1;
+        DB::update('users', ['report_email_opt_out' => $optOut], 'id = ?', [(int) $user['id']]);
+        AuditLogger::log('user.report_emails', 'user', (int) $user['id'], $optOut ? 'Turned off management report emails' : 'Turned on management report emails');
+        flash('success', $optOut ? 'You will no longer get emails about management reports.' : 'You will get emails about management reports.');
+        return redirect('/account/password');
+    }
 }

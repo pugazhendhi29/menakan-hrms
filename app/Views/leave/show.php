@@ -6,9 +6,9 @@
         <dt>Dates</dt><dd><?= e(uk_date($r['start_date'])) ?><?= $r['start_half'] ? ' (afternoon)' : '' ?> to <?= e(uk_date($r['end_date'])) ?><?= $r['end_half'] ? ' (morning)' : '' ?></dd>
         <dt>Working days</dt><dd><?= e(days_label($r['days'])) ?> <small class="text-muted-2">(weekends, non-working days and bank holidays excluded)</small></dd>
         <dt>Reason</dt><dd><?= e($r['reason'] ?: '—') ?></dd>
-        <dt>Requested date</dt><dd><?= e(uk_date($r['requested_on'])) ?> <small class="text-muted-2">(entered <?= e(uk_datetime($r['created_at'])) ?> by <?= e($r['requested_by_name'] ?? '—') ?>)</small></dd>
+        <dt>Requested date</dt><dd><?= e(uk_date($r['requested_on'])) ?> <small class="text-muted-2">(entered by <?= e($r['requested_by_name'] ?? '—') ?> on <?= e($r['requested_on'] ? uk_date($r['requested_on']) : uk_datetime($r['created_at'])) ?>)</small></dd>
         <dt>Approved date</dt><dd><?= $r['approved_on'] ? e(uk_date($r['approved_on'])) : '—' ?></dd>
-        <?php if ($r['decided_at']): ?><dt>Decision</dt><dd><?= e(ucfirst($r['status'])) ?> by <?= e($r['decided_by_name'] ?? '—') ?> on <?= e(uk_datetime($r['decided_at'])) ?><?= $r['decision_note'] ? ' · ' . e($r['decision_note']) : '' ?></dd><?php endif; ?>
+        <?php if ($r['decided_at']): ?><dt>Decision</dt><dd><?= e(ucfirst($r['status'])) ?> by <?= e($r['decided_by_name'] ?? '—') ?> on <?= e($r['approved_on'] ? uk_date($r['approved_on']) : uk_datetime($r['decided_at'])) ?><?= $r['decision_note'] ? ' · ' . e($r['decision_note']) : '' ?></dd><?php endif; ?>
       </dl></div>
     </div>
     <?php if ($r['status'] === 'pending'): ?>
