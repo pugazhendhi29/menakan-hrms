@@ -64,7 +64,7 @@ abstract class FeatureTestCase extends TestCase
         $f['empA'] = $mk('Bob', 'Driver');
         $f['empB'] = $mk('Cara', 'Courier');
         $hash = password_hash('Password12345', PASSWORD_BCRYPT, ['cost' => 4]);
-        $f['admin'] = DB::insert('users', ['username' => 'admin', 'role' => 'admin', 'employee_id' => $f['empAdmin'], 'password_hash' => $hash]);
+        $f['admin'] = DB::insert('users', ['username' => 'admin', 'role' => 'admin', 'employee_id' => $f['empAdmin'], 'password_hash' => $hash, 'can_edit_employees' => 1]);
         $f['admin2'] = DB::insert('users', ['username' => 'admin2', 'role' => 'admin', 'password_hash' => $hash]);
         $f['userA'] = DB::insert('users', ['username' => 'bob', 'role' => 'employee', 'employee_id' => $f['empA'], 'password_hash' => $hash]);
         $f['userB'] = DB::insert('users', ['username' => 'cara', 'role' => 'employee', 'employee_id' => $f['empB'], 'password_hash' => $hash]);

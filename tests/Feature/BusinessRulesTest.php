@@ -326,15 +326,14 @@ final class BusinessRulesTest extends FeatureTestCase
         $this->assertSame('Cara', DB::value('SELECT first_name FROM employees WHERE id = ?', [$id]));
     }
 
-    public function testMyProfileIsReadOnlyForEmployees(): void
+    public function testMyProfileIsEditedOnlyThroughTheEditPage(): void
     {
         DB::insert('employee_work_experience', ['employee_id' => self::$f['empA'], 'company_name' => 'Old Ltd', 'job_title' => 'Driver', 'from_date' => '2018-01-01', 'to_date' => '2019-01-01']);
         $this->actingAs(self::$f['userA']);
         $page = $this->get('/my/profile');
         $this->assertSame(200, $page->status);
         $this->assertStringContainsString('Old Ltd', $page->body);   // shown
-        $this->assertStringNotContainsString('Add / edit', $page->body);   // but not editable
-        $this->assertStringContainsString('Your profile is read only', $page->body);
+        $this->assertStringContainsString('/my/profile/edit', $page->body);   // edited on its own page (see SelfProfileTest)
         $this->assertSame(404, $this->get('/my/history')->status);
         $this->assertNotSame(302, $this->post('/my/history', ['experience' => [['company_name' => 'Mine Ltd', 'job_title' => 'Driver', 'from_date' => '2018-01-01']]])->status);
         $this->assertSame(0, (int) DB::value("SELECT COUNT(*) FROM employee_work_experience WHERE company_name = 'Mine Ltd'"));

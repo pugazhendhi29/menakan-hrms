@@ -64,6 +64,26 @@ final class MyController extends Controller
             'educationRows' => DB::all('SELECT * FROM employee_education WHERE employee_id = ? ORDER BY completion_date DESC', [$me['id']])]);
     }
 
+    /** The employee edits their own Personal, Identity and Contact details, work experience and education. */
+    public function editProfile(Request $request): Response
+    {
+        $me = $this->me();
+        return view('my/profile_form', ['title' => 'Edit my profile', 'me' => $me,
+            'experienceRows' => DB::all('SELECT * FROM employee_work_experience WHERE employee_id = ? ORDER BY is_current DESC, from_date DESC', [$me['id']]),
+            'educationRows' => DB::all('SELECT * FROM employee_education WHERE employee_id = ? ORDER BY completion_date IS NULL, completion_date DESC', [$me['id']])]);
+    }
+
+    public function updateProfile(Request $request): Response
+    {
+        $id = (int) Auth::employeeId();
+        return $this->attempt($request, '/my/profile/edit', function () use ($request, $id) {
+            \App\Services\EmployeeService::updateOwn($id, $request->only(\App\Services\EmployeeService::SELF_FIELDS)
+                + ['experience' => $request->arr('experience'), 'education' => $request->arr('education')], $this->userId());
+            flash('success', 'Your profile has been updated.');
+            return redirect('/my/profile');
+        });
+    }
+
     public function documents(Request $request): Response
     {
         $me = $this->me();

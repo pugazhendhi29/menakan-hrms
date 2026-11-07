@@ -21,6 +21,19 @@ final class EmployeeService
         'personal_mobile', 'personal_email',
     ];
 
+    /**
+     * Fields an employee may change on their own record (Personal details, Identity information and
+     * Contact details), plus work experience and education. Everything else (basic, work, hierarchy,
+     * separation and pay information) is admin only.
+     */
+    public const SELF_FIELDS = [
+        'date_of_birth', 'gender', 'marital_status', 'nationality', 'visa_type', 'visa_start_date', 'visa_end_date',
+        'rtw_check_status', 'rtw_check_date', 'rtw_followup_date',
+        'ni_number', 'passport_number',
+        'address_line1', 'address_line2', 'city', 'postcode', 'permanent_same_as_present', 'permanent_address',
+        'personal_mobile', 'personal_email', 'phone', 'emergency_contact_name', 'emergency_contact_phone', 'emergency_contact_relationship',
+    ];
+
     public const MARITAL = ['Single', 'Married', 'Civil partnership', 'Cohabiting', 'Separated', 'Divorced', 'Widowed', 'Prefer not to say'];
     public const SOURCES = ['Direct application', 'Employee referral', 'Job board', 'Recruitment agency', 'Company website', 'Social media', 'Jobcentre Plus', 'Rehire', 'Other'];
     public const RTW_STATUSES = ['Not yet checked', 'Checked - unlimited right', 'Checked - time-limited', 'Follow-up check due', 'Failed / no right to work'];
@@ -417,6 +430,36 @@ final class EmployeeService
             }
             AuditLogger::log('employee.updated', 'employee', $id, 'Updated employee ' . $before['employee_code'], self::auditSafe(AuditLogger::diff($before, $data)));
         });
+    }
+
+    /**
+     * An employee updating their own record: only SELF_FIELDS (and work experience / education) are
+     * taken from the input; every other field keeps its current value, whatever was posted.
+     */
+    public static function updateOwn(int $id, array $input, int $userId): void
+    {
+        $current = DB::one('SELECT * FROM employees WHERE id = ? AND deleted_at IS NULL', [$id]);
+        if (!$current) {
+            throw new ValidationException('Employee not found.');
+        }
+        $merged = EmployeeTransfer::currentInput($current);
+        foreach (self::SELF_FIELDS as $f) {
+            $merged[$f] = $f === 'permanent_same_as_present' ? (!empty($input[$f]) ? '1' : '0') : (string) ($input[$f] ?? '');
+        }
+        $merged['history_submitted'] = '1';
+        $merged['experience'] = (array) ($input['experience'] ?? []);
+        $merged['education'] = (array) ($input['education'] ?? []);
+        try {
+            self::update($id, $merged, $userId);
+        } catch (ValidationException $e) {
+            $allowed = array_flip(self::SELF_FIELDS);
+            foreach (array_keys($e->errors) as $k) {
+                if (!isset($allowed[$k]) && !str_starts_with((string) $k, 'experience') && !str_starts_with((string) $k, 'education')) {
+                    throw new ValidationException('Some of your work details held by HR need correcting before your profile can be saved. Please contact HR.', $e->errors);
+                }
+            }
+            throw $e;
+        }
     }
 
     /** Soft delete: the record is kept for audit/retention; linked accounts are deactivated. */

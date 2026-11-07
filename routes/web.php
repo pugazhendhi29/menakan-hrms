@@ -103,6 +103,8 @@ return function (Router $r): void {
         $r->group(['employee'], function (Router $r) {
             $r->get('/my', [MyController::class, 'dashboard']);
             $r->get('/my/profile', [MyController::class, 'profile']);
+            $r->get('/my/profile/edit', [MyController::class, 'editProfile']);
+            $r->post('/my/profile', [MyController::class, 'updateProfile']);
             $r->get('/my/documents', [MyController::class, 'documents']);
             $r->get('/my/attendance', [MyController::class, 'attendance']);
             $r->post('/my/attendance/check-in', [MyController::class, 'checkIn']);

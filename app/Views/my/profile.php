@@ -59,4 +59,7 @@ $age = EmployeeService::age($me['date_of_birth']);
   </div>
 </div>
 <?= App\Core\View::render('employees/_history_tables', ['experienceRows' => $experienceRows, 'educationRows' => $educationRows], null) ?>
-<div class="alert alert-light border small mb-0">Your profile is read only. If anything here is wrong or missing, please tell HR.</div>
+<div class="alert alert-light border small mb-0 d-flex flex-wrap align-items-center gap-2 justify-content-between">
+  <span>You can update your personal, identity and contact details, work experience and education. For anything else, please tell HR.</span>
+  <a class="btn btn-sm btn-primary" href="<?= e(url('/my/profile/edit')) ?>"><i class="bi bi-pencil"></i> Edit my details</a>
+</div>
