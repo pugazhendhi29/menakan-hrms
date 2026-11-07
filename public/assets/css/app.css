@@ -1069,6 +1069,16 @@ a.stat:hover .stat-body::after { transform: translateX(3px); background-color: r
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .card, .filters, .stat, .kpi, .inbox, .mail-msg, .mail-reply, .compose, .form-box, .dropdown-menu, .modal-content, .org-card, .top-search input { background: #fff; }
 }
+/* Phones and tablets: the frosted-glass blur, the fixed gradient backdrop and the entrance animation
+   make mobile browsers repaint every panel, so pages appear slowly and scrolling stutters.
+   Use near-solid panels there instead; desktops keep the glass look. */
+@media (max-width: 991.98px), (hover: none) {
+  :root { --glass: rgba(255, 255, 255, .95); --glass-strong: rgba(255, 255, 255, .98); }
+  body { background-attachment: scroll; }
+  *, *::before, *::after { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+  .top { background: rgba(255, 255, 255, .97); }
+  .content > * { animation: none; }
+}
 /* Reduced motion: no entrance or hover movement */
 @media (prefers-reduced-motion: reduce) {
   .content > * { animation: none; }
